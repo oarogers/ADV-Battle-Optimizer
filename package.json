@@ -1,11 +1,12 @@
 {
-  "name": "adv-poc-foul-play-bridge",
-  "version": "0.2.0",
+  "name": "adv-battle-optimizer",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
     "bridge": "node src/run-bridge.mjs",
-    "validate": "node src/validate.mjs"
+    "validate": "node src/validate.mjs",
+    "validate:optimizer": "node src/optimizer/validate.mjs"
   },
   "dependencies": {
     "pokemon-showdown": "latest"
