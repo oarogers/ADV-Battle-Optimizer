@@ -1,0 +1,7 @@
+This file is only a marker.
+
+Run:
+
+    ./scripts/setup-foul-play.sh
+
+The script clones https://github.com/pmariglia/foul-play into ./foul-play-src.
