@@ -43,11 +43,14 @@ class Bridge:
         if spec.gen_number == 0:
             raise ValueError(f"format does not contain a supported generation: {self.format!r}")
 
-        # Foul Play's search/data layers read the active format from its
-        # process-wide config. Setting Battle.generation alone is not enough:
-        # current_generation_mechanics() consults FoulPlayConfig.format_spec.
-        FoulPlayConfig.format_spec = spec
-        FoulPlayConfig.smogon_stats = spec.base_name
+        # Foul Play's format_spec is a read-only property derived from
+        # pokemon_format. Configure the singleton through that source field.
+        # The search/data layers use FoulPlayConfig.format_spec globally.
+        FoulPlayConfig.pokemon_format = self.format
+        FoulPlayConfig.smogon_stats = msg.get("smogon_stats_format") or spec.base_name
+        FoulPlayConfig.search_time_ms = int(msg.get("search_time_ms", 100))
+        FoulPlayConfig.parallelism = int(msg.get("search_parallelism", 1))
+        FoulPlayConfig.search_threads = int(msg.get("search_threads", 1))
 
         self.mode = StandardBattleMode()
         self.battle = Battle("bridge")
@@ -107,9 +110,6 @@ class Bridge:
 
             if line.startswith("|switch|"):
                 parts = line.split("|")
-                # Switch identifiers are p1a: Pokemon / p2a: Pokemon, not
-                # simply p1 / p2. Capture the opponent's first active switch
-                # so Foul Play can initialize its non-team-preview state.
                 if len(parts) > 3 and parts[2].startswith(self.battle.opponent.name + "a:"):
                     if self.pending_opponent_switch is None:
                         self.pending_opponent_switch = line
@@ -136,10 +136,6 @@ class Bridge:
                 if self.battle.turn and self.battle.started:
                     raise
 
-        # Foul Play's protocol updater does not always report the action
-        # requirement for a standalone Showdown request message. The request
-        # itself is authoritative: if Showdown is asking this side for an
-        # active move/switch and the battle is ready, search for a decision.
         if request_seen and self.request_needs_decision(self.pending_request):
             action_required = True
 
