@@ -4,10 +4,11 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 export class FoulPlayProcess {
-  constructor({ root, side, timeoutMs = 60_000 }) {
+  constructor({ root, side, timeoutMs = 15_000, searchTimeMs = 50 } = {}) {
     this.root = root;
     this.side = side;
     this.timeoutMs = timeoutMs;
+    this.searchTimeMs = searchTimeMs;
     this.child = null;
     this.ready = false;
     this.waiters = [];
@@ -51,6 +52,9 @@ export class FoulPlayProcess {
       opponent_side: this.side === "p1" ? "p2" : "p1",
       user_team: userTeam,
       opponent_team: opponentTeam,
+      search_time_ms: this.searchTimeMs,
+      search_parallelism: 1,
+      search_threads: 1,
     });
   }
 
