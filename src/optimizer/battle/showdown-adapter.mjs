@@ -44,15 +44,14 @@ export class ShowdownBattleEngine extends BattleEngine {
     const consume = async (side, playerStream) => {
       for await (const chunk of playerStream) {
         chunks[side].push(chunk);
-
-        // BattleStream player streams are not guaranteed to close immediately
-        // after a terminal message. Stop consuming as soon as Showdown declares
-        // a winner/tie so the smoke test cannot wait forever for stream closure.
         if (chunk.includes("|win|") || chunk.includes("|tie|")) {
           battleFinished = true;
-          continue;
+          // A BattleStream player iterator may remain open after the terminal
+          // protocol message. Return immediately; the battle result is already
+          // fully represented by the chunks received so far.
+          return;
         }
-        if (battleFinished) continue;
+        if (battleFinished) return;
 
         const isRequest = chunk.includes("|request|");
         const waiter = isRequest ? foulPlay[side].waitForRecommendation() : null;
@@ -66,7 +65,7 @@ export class ShowdownBattleEngine extends BattleEngine {
 
         if (waiter) {
           const decision = await waiter;
-          if (battleFinished) continue;
+          if (battleFinished) return;
           if (decision.decision) {
             const safeDecision = validateAdvDecision(decision.decision, this.format);
             stream.write(`>${side} ${safeDecision}`);
@@ -85,7 +84,13 @@ export class ShowdownBattleEngine extends BattleEngine {
       stream.write(`>player p1 ${JSON.stringify({ name: "Optimizer", team: Teams.pack(ourTeam) })}`);
       stream.write(`>player p2 ${JSON.stringify({ name: "Opponent", team: Teams.pack(opponentTeam) })}`);
 
-      await Promise.all([consume("p1", playerStreams.p1), consume("p2", playerStreams.p2)]);
+      // Once Showdown has declared a result, the player iterators are allowed
+      // to remain open internally. Do not make battle completion depend on
+      // those iterators closing.
+      await Promise.race([
+        Promise.all([consume("p1", playerStreams.p1), consume("p2", playerStreams.p2)]),
+        waitForBattleCompletion(15_000),
+      ]);
 
       const protocolLog = [...chunks.p1.map((chunk) => `[p1]\n${chunk}`), ...chunks.p2.map((chunk) => `[p2]\n${chunk}`)].join("\n");
       const winner = parseWinner(protocolLog);
@@ -95,6 +100,10 @@ export class ShowdownBattleEngine extends BattleEngine {
       foulPlay.p2.stop();
     }
   }
+}
+
+function waitForBattleCompletion(ms) {
+  return new Promise((_, reject) => setTimeout(() => reject(new Error(`Showdown battle did not complete within ${ms} ms`)), ms));
 }
 
 function previewOrder(team, lead) {
