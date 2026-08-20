@@ -11,6 +11,7 @@ export class FoulPlayProcess {
     this.searchTimeMs = searchTimeMs;
     this.child = null;
     this.ready = false;
+    this.readyWaiters = [];
     this.waiters = [];
     this.stderr = "";
   }
@@ -34,14 +35,14 @@ export class FoulPlayProcess {
       this.stderr += text;
       if (process.env.DEBUG_FOUL_PLAY) process.stderr.write(`[foul-play ${this.side}] ${text}`);
     });
-    this.child.on("error", (error) => this.rejectAll(error));
+    this.child.on("error", (error) => { this.rejectAll(error); this.rejectReady(error); });
     this.child.on("exit", (code, signal) => {
-      if (code !== 0) {
-        const detail = this.stderr.trim();
-        this.rejectAll(new Error(
-          `Foul Play ${this.side} exited with code ${code}${signal ? ` (${signal})` : ""}${detail ? `: ${detail}` : ""}`,
-        ));
-      }
+      const detail = this.stderr.trim();
+      const error = code !== 0
+        ? new Error(`Foul Play ${this.side} exited with code ${code}${signal ? ` (${signal})` : ""}${detail ? `: ${detail}` : ""}`)
+        : new Error(`Foul Play ${this.side} exited before becoming ready`);
+      if (code !== 0 || !this.ready) this.rejectAll(error);
+      this.rejectReady(error);
     });
     const reader = createInterface({ input: this.child.stdout });
     reader.on("line", (line) => this.handleMessage(line));
@@ -61,9 +62,18 @@ export class FoulPlayProcess {
   handleMessage(line) {
     let msg;
     try { msg = JSON.parse(line); } catch { return; }
-    if (msg.type === "ready") { this.ready = true; return; }
+    if (msg.type === "ready") {
+      this.ready = true;
+      for (const waiter of this.readyWaiters.splice(0)) {
+        clearTimeout(waiter.timer);
+        waiter.resolve(msg);
+      }
+      return;
+    }
     if (msg.type === "error") {
-      this.rejectAll(new Error(`Foul Play ${this.side}: ${msg.error}`));
+      const error = new Error(`Foul Play ${this.side}: ${msg.error}`);
+      this.rejectAll(error);
+      this.rejectReady(error);
       return;
     }
     if (msg.type === "recommendation") {
@@ -78,6 +88,22 @@ export class FoulPlayProcess {
   }
 
   update(chunk) { this.send({ type: "showdown", chunk }); }
+
+  async waitUntilReady(timeoutMs = 10_000) {
+    if (this.ready) return;
+    await new Promise((resolve, reject) => {
+      const waiter = {
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          const index = this.readyWaiters.indexOf(waiter);
+          if (index >= 0) this.readyWaiters.splice(index, 1);
+          reject(new Error(`Timed out waiting for Foul Play ${this.side} initialization`));
+        }, timeoutMs),
+      };
+      this.readyWaiters.push(waiter);
+    });
+  }
 
   async waitForRecommendation() {
     return new Promise((resolve, reject) => {
@@ -95,6 +121,13 @@ export class FoulPlayProcess {
     });
   }
 
+  rejectReady(error) {
+    for (const waiter of this.readyWaiters.splice(0)) {
+      clearTimeout(waiter.timer);
+      waiter.reject(error);
+    }
+  }
+
   rejectAll(error) {
     for (const waiter of this.waiters.splice(0)) waiter.reject(error);
   }
@@ -105,6 +138,7 @@ export class FoulPlayProcess {
     this.child.kill();
     this.child = null;
     this.ready = false;
+    this.rejectReady(new Error(`Foul Play ${this.side} stopped`));
   }
 }
 
