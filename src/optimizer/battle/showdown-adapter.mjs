@@ -130,8 +130,11 @@ function validateAdvDecision(decision, format) {
   let normalized = String(decision).trim();
   if (normalized.startsWith("/choose ")) normalized = normalized.slice("/choose ".length).trim();
   if (normalized === "/choose") normalized = "";
+  // The bridge speaks Foul Play's `/switch N` syntax, while the embedded
+  // Showdown BattleStream expects `switch N` after the player prefix.
+  if (normalized.startsWith("/switch ")) normalized = normalized.slice("/".length);
   if (format !== "gen3ou") return normalized;
-  if (/\bterastallize\b/i.test(normalized) || /\bmega\b/i.test(normalized) || /\bzmove\b/i.test(normalized) || /\bdynamax\b/i.test(normalized)) {
+  if (/\bterastallize\b/i.test(normalized) || /\bmega\b/i.test(normalized) || /\bzmove\b/i.test(normalized) || /\bdynamax\b/i.test(normalized) || /\bgigantamax\b/i.test(normalized)) {
     throw new Error(`Foul Play produced a non-ADV action for ${format}: ${normalized}`);
   }
   return normalized;
