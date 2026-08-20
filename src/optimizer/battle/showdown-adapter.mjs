@@ -1,14 +1,17 @@
 import pkg from "pokemon-showdown";
 import { BattleEngine, validateBattleRequest } from "./battle-engine.mjs";
 import { normalizeTeam } from "../domain/types.mjs";
-import { battleId, canonicalJson, teamId } from "../domain/identity.mjs";
+import { teamId, battleId, canonicalJson } from "../domain/identity.mjs";
+import { FoulPlayProcess, defaultFoulPlayRoot } from "./foul-play-process.mjs";
 
-const { BattleStream, Teams, TeamValidator } = pkg;
+const { BattleStream, Teams, TeamValidator, getPlayerStreams } = pkg;
 
 export class ShowdownBattleEngine extends BattleEngine {
-  constructor({ format = "gen3ou" } = {}) {
+  constructor({ format = "gen3ou", foulPlayRoot = defaultFoulPlayRoot(), decisionTimeoutMs = 60_000 } = {}) {
     super();
     this.format = format;
+    this.foulPlayRoot = foulPlayRoot;
+    this.decisionTimeoutMs = decisionTimeoutMs;
     this.validator = new TeamValidator(format);
   }
 
@@ -24,53 +27,97 @@ export class ShowdownBattleEngine extends BattleEngine {
     const ourTeam = this.validateTeam(request.ourTeam);
     const opponentTeam = this.validateTeam(request.opponentTeam);
     const seed = request.seed ?? [1, 2, 3, 4];
+    const ourTeamId = teamId(ourTeam);
+    const opponentTeamId = teamId(opponentTeam);
     const id = battleId({
       format: this.format,
-      ourTeam: teamId(ourTeam),
-      opponentTeam: teamId(opponentTeam),
+      ourTeam: ourTeamId,
+      opponentTeam: opponentTeamId,
       ourLead: request.ourLead ?? null,
       opponentLead: request.opponentLead ?? null,
       seed,
       engineVersion: pkg?.VERSION ?? "unknown",
+      ai: "foul-play",
     });
 
-    // This adapter deliberately owns only simulation setup. Decision making
-    // remains injectable so Foul Play can control either side later.
     const stream = new BattleStream();
-    const packed1 = Teams.pack(ourTeam);
-    const packed2 = Teams.pack(opponentTeam);
-    const chunks = [];
-
-    const consume = async (playerStream) => {
-      for await (const chunk of playerStream) chunks.push(chunk);
+    const playerStreams = getPlayerStreams(stream);
+    const chunks = { p1: [], p2: [] };
+    const foulPlay = {
+      p1: new FoulPlayProcess({ root: this.foulPlayRoot, side: "p1", timeoutMs: this.decisionTimeoutMs }),
+      p2: new FoulPlayProcess({ root: this.foulPlayRoot, side: "p2", timeoutMs: this.decisionTimeoutMs }),
     };
 
-    const playerStreams = pkg.getPlayerStreams(stream);
-    const readers = [consume(playerStreams.p1), consume(playerStreams.p2)];
+    const consume = async (side, playerStream) => {
+      for await (const chunk of playerStream) {
+        chunks[side].push(chunk);
+        foulPlay[side].update(chunk);
 
-    stream.write(`>start ${JSON.stringify({ formatid: this.format, seed })}`);
-    stream.write(`>player p1 ${JSON.stringify({ name: "Optimizer", team: packed1 })}`);
-    stream.write(`>player p2 ${JSON.stringify({ name: "Opponent", team: packed2 })}`);
+        // Team preview is a separate protocol phase. Foul Play's bridge is
+        // initialized for non-preview battle state, so select the first six
+        // slots here. Explicit leads are supported by selecting the requested
+        // slot when supplied; otherwise slot 1 is used as the deterministic
+        // default until lead optimization is added.
+        if (chunk.includes("|teampreview|")) {
+          const requested = side === "p1" ? request.ourLead : request.opponentLead;
+          const index = requested ? ourTeam.indexOf(requested) + 1 : 1;
+          stream.write(`>${side} team ${index > 0 ? index : 1}`);
+          continue;
+        }
 
-    // The engine contract returns the raw protocol now. A decision adapter
-    // will consume requests in the next battle-worker milestone.
-    stream.write(`>p1 team 123456`);
-    stream.write(`>p2 team 123456`);
-    await Promise.race([
-      Promise.all(readers),
-      new Promise((resolve) => setTimeout(resolve, request.timeoutMs ?? 1000)),
-    ]);
-
-    return {
-      id,
-      format: this.format,
-      ourTeamId: teamId(ourTeam),
-      opponentTeamId: teamId(opponentTeam),
-      seed,
-      protocolLog: chunks.join(""),
-      status: "simulator-ready",
-      engineVersion: pkg?.VERSION ?? "unknown",
-      canonicalRequest: canonicalJson({ ourTeam, opponentTeam, seed }),
+        if (chunk.includes("|request|")) {
+          const decision = await foulPlay[side].waitForRecommendation();
+          if (decision.decision) stream.write(`>${side} ${decision.decision}`);
+        }
+      }
     };
+
+    try {
+      foulPlay.p1.start({ format: this.format, userTeam: ourTeam, opponentTeam });
+      foulPlay.p2.start({ format: this.format, userTeam: opponentTeam, opponentTeam: ourTeam });
+
+      stream.write(`>start ${JSON.stringify({ formatid: this.format, seed })}`);
+      stream.write(`>player p1 ${JSON.stringify({ name: "Optimizer", team: Teams.pack(ourTeam) })}`);
+      stream.write(`>player p2 ${JSON.stringify({ name: "Opponent", team: Teams.pack(opponentTeam) })}`);
+
+      await Promise.all([
+        consume("p1", playerStreams.p1),
+        consume("p2", playerStreams.p2),
+      ]);
+
+      const protocolLog = chunks.p1.map((chunk) => `[p1]\n${chunk}`).concat(
+        chunks.p2.map((chunk) => `[p2]\n${chunk}`),
+      ).join("\n");
+      const winner = parseWinner(protocolLog);
+      const turns = parseTurns(protocolLog);
+
+      return {
+        id,
+        format: this.format,
+        ourTeamId,
+        opponentTeamId,
+        seed,
+        winner,
+        turns,
+        status: winner ? "complete" : "incomplete",
+        protocolLog,
+        engineVersion: pkg?.VERSION ?? "unknown",
+        ai: "foul-play",
+        canonicalRequest: canonicalJson({ ourTeam, opponentTeam, seed }),
+      };
+    } finally {
+      foulPlay.p1.stop();
+      foulPlay.p2.stop();
+    }
   }
+}
+
+function parseWinner(log) {
+  const match = log.match(/\|win\|([^\n|]+)/);
+  return match?.[1] ?? null;
+}
+
+function parseTurns(log) {
+  const matches = [...log.matchAll(/\|turn\|(\d+)/g)];
+  return matches.length ? Number(matches[matches.length - 1][1]) : 0;
 }
