@@ -81,11 +81,7 @@ class Bridge:
             return False
         return bool(request.get("active") or request.get("forceSwitch"))
 
-    async def message(self, chunk):
-        if not self.battle:
-            raise RuntimeError("bridge received Showdown data before init")
-
-        lines = [x for x in chunk.splitlines() if x]
+    def capture_lines(self, lines):
         request_seen = False
         for line in lines:
             if "|request|" in line:
@@ -96,10 +92,23 @@ class Bridge:
                     request_seen = True
                 except json.JSONDecodeError:
                     pass
+
             if line.startswith("|switch|"):
                 parts = line.split("|")
-                if len(parts) > 3 and parts[2] == self.battle.opponent.name:
-                    self.pending_opponent_switch = line
+                # Switch identifiers are p1a: Pokemon / p2a: Pokemon, not
+                # simply p1 / p2. Capture the opponent's first active switch
+                # so Foul Play can initialize its non-team-preview state.
+                if len(parts) > 3 and parts[2].startswith(self.battle.opponent.name + "a:"):
+                    if self.pending_opponent_switch is None:
+                        self.pending_opponent_switch = line
+        return request_seen
+
+    async def message(self, chunk):
+        if not self.battle:
+            raise RuntimeError("bridge received Showdown data before init")
+
+        lines = [x for x in chunk.splitlines() if x]
+        request_seen = self.capture_lines(lines)
 
         await self.initialize_from_first_turn()
         if not self.initialized:
