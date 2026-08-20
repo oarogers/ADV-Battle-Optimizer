@@ -1,0 +1,53 @@
+Swampert @ Leftovers
+Ability: Torrent
+EVs: 252 HP / 4 Atk / 252 Def
+Relaxed Nature
+- Earthquake
+- Ice Beam
+- Roar
+- Rest
+
+Jirachi @ Leftovers
+Ability: Serene Grace
+EVs: 252 HP / 236 SpD / 20 Spe
+Careful Nature
+- Wish
+- Protect
+- Thunder Wave
+- Body Slam
+
+Milotic @ Leftovers
+Ability: Marvel Scale
+EVs: 252 HP / 252 Def / 4 Spe
+Bold Nature
+- Surf
+- Recover
+- Toxic
+- Ice Beam
+
+Claydol @ Leftovers
+Ability: Levitate
+EVs: 252 HP / 144 Def / 112 SpD
+Careful Nature
+- Rapid Spin
+- Earthquake
+- Psychic
+- Explosion
+
+Tyranitar @ Leftovers
+Ability: Sand Stream
+EVs: 252 HP / 88 Atk / 168 Spe
+Adamant Nature
+- Rock Slide
+- Earthquake
+- Pursuit
+- Thunder Wave
+
+Salamence @ Leftovers
+Ability: Intimidate
+EVs: 4 HP / 252 Atk / 252 Spe
+Jolly Nature
+- Dragon Dance
+- Hidden Power Flying
+- Earthquake
+- Rock Slide
