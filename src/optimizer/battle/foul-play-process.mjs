@@ -26,7 +26,6 @@ export class FoulPlayProcess {
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
-
     this.child.stderr.on("data", (chunk) => {
       if (process.env.DEBUG_FOUL_PLAY) process.stderr.write(`[foul-play ${this.side}] ${chunk}`);
     });
@@ -34,10 +33,8 @@ export class FoulPlayProcess {
     this.child.on("exit", (code) => {
       if (code !== 0) this.rejectAll(new Error(`Foul Play ${this.side} exited with code ${code}`));
     });
-
     const reader = createInterface({ input: this.child.stdout });
     reader.on("line", (line) => this.handleMessage(line));
-
     this.send({
       type: "init",
       format,
@@ -51,10 +48,7 @@ export class FoulPlayProcess {
   handleMessage(line) {
     let msg;
     try { msg = JSON.parse(line); } catch { return; }
-    if (msg.type === "ready") {
-      this.ready = true;
-      return;
-    }
+    if (msg.type === "ready") { this.ready = true; return; }
     if (msg.type === "error") {
       this.rejectAll(new Error(`Foul Play ${this.side}: ${msg.error}`));
       return;
@@ -70,21 +64,21 @@ export class FoulPlayProcess {
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
   }
 
-  update(chunk) {
-    this.send({ type: "showdown", chunk });
-  }
+  update(chunk) { this.send({ type: "showdown", chunk }); }
 
   async waitForRecommendation() {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const index = this.waiters.findIndex((w) => w.resolve === resolve);
+      const waiter = {
+        resolve: (value) => { clearTimeout(waiter.timer); resolve(value); },
+        reject: (error) => { clearTimeout(waiter.timer); reject(error); },
+        timer: null,
+      };
+      waiter.timer = setTimeout(() => {
+        const index = this.waiters.indexOf(waiter);
         if (index >= 0) this.waiters.splice(index, 1);
         reject(new Error(`Timed out waiting for Foul Play ${this.side} decision`));
       }, this.timeoutMs);
-      this.waiters.push({
-        resolve: (value) => { clearTimeout(timer); resolve(value); },
-        reject: (error) => { clearTimeout(timer); reject(error); },
-      });
+      this.waiters.push(waiter);
     });
   }
 
