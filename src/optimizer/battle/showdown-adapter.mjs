@@ -29,16 +29,7 @@ export class ShowdownBattleEngine extends BattleEngine {
     const seed = request.seed ?? [1, 2, 3, 4];
     const ourTeamId = teamId(ourTeam);
     const opponentTeamId = teamId(opponentTeam);
-    const id = battleId({
-      format: this.format,
-      ourTeam: ourTeamId,
-      opponentTeam: opponentTeamId,
-      ourLead: request.ourLead ?? null,
-      opponentLead: request.opponentLead ?? null,
-      seed,
-      engineVersion: pkg?.VERSION ?? "unknown",
-      ai: "foul-play",
-    });
+    const id = battleId({ format: this.format, ourTeam: ourTeamId, opponentTeam: opponentTeamId, ourLead: request.ourLead ?? null, opponentLead: request.opponentLead ?? null, seed, engineVersion: pkg?.VERSION ?? "unknown", ai: "foul-play" });
 
     const stream = new BattleStream();
     const playerStreams = getPlayerStreams(stream);
@@ -52,22 +43,14 @@ export class ShowdownBattleEngine extends BattleEngine {
     const consume = async (side, playerStream) => {
       for await (const chunk of playerStream) {
         chunks[side].push(chunk);
-
-        // Register the waiter BEFORE sending the request to Foul Play. The old
-        // ordering had a race: a fast Foul Play response could arrive before
-        // waitForRecommendation() installed its waiter, causing the response
-        // to be dropped and the battle to appear hung.
         const isRequest = chunk.includes("|request|");
         const waiter = isRequest ? foulPlay[side].waitForRecommendation() : null;
-
         foulPlay[side].update(chunk);
-
         if (chunk.includes("|teampreview|")) {
           const requestedLead = side === "p1" ? request.ourLead : request.opponentLead;
           stream.write(`>${side} team ${previewOrder(teams[side], requestedLead)}`);
           continue;
         }
-
         if (waiter) {
           const decision = await waiter;
           if (decision.decision) stream.write(`>${side} ${decision.decision}`);
@@ -79,34 +62,20 @@ export class ShowdownBattleEngine extends BattleEngine {
       foulPlay.p1.start({ format: this.format, userTeam: ourTeam, opponentTeam });
       foulPlay.p2.start({ format: this.format, userTeam: opponentTeam, opponentTeam: ourTeam });
 
+      // Establish both Python bridges before sending any Showdown protocol.
+      // This prevents early protocol chunks from being lost while Foul Play is
+      // still constructing its battle/search state.
+      await Promise.all([foulPlay.p1.waitUntilReady(), foulPlay.p2.waitUntilReady()]);
+
       stream.write(`>start ${JSON.stringify({ formatid: this.format, seed })}`);
       stream.write(`>player p1 ${JSON.stringify({ name: "Optimizer", team: Teams.pack(ourTeam) })}`);
       stream.write(`>player p2 ${JSON.stringify({ name: "Opponent", team: Teams.pack(opponentTeam) })}`);
 
-      await Promise.all([
-        consume("p1", playerStreams.p1),
-        consume("p2", playerStreams.p2),
-      ]);
+      await Promise.all([consume("p1", playerStreams.p1), consume("p2", playerStreams.p2)]);
 
-      const protocolLog = [
-        ...chunks.p1.map((chunk) => `[p1]\n${chunk}`),
-        ...chunks.p2.map((chunk) => `[p2]\n${chunk}`),
-      ].join("\n");
-
-      return {
-        id,
-        format: this.format,
-        ourTeamId,
-        opponentTeamId,
-        seed,
-        winner: parseWinner(protocolLog),
-        turns: parseTurns(protocolLog),
-        status: parseWinner(protocolLog) ? "complete" : "incomplete",
-        protocolLog,
-        engineVersion: pkg?.VERSION ?? "unknown",
-        ai: "foul-play",
-        canonicalRequest: canonicalJson({ ourTeam, opponentTeam, seed }),
-      };
+      const protocolLog = [...chunks.p1.map((chunk) => `[p1]\n${chunk}`), ...chunks.p2.map((chunk) => `[p2]\n${chunk}`)].join("\n");
+      const winner = parseWinner(protocolLog);
+      return { id, format: this.format, ourTeamId, opponentTeamId, seed, winner, turns: parseTurns(protocolLog), status: winner ? "complete" : "incomplete", protocolLog, engineVersion: pkg?.VERSION ?? "unknown", ai: "foul-play", canonicalRequest: canonicalJson({ ourTeam, opponentTeam, seed }) };
     } finally {
       foulPlay.p1.stop();
       foulPlay.p2.stop();
@@ -116,20 +85,9 @@ export class ShowdownBattleEngine extends BattleEngine {
 
 function previewOrder(team, lead) {
   const species = lead?.species ?? lead?.name ?? lead;
-  const index = species
-    ? team.findIndex((set) => String(set.species).toLowerCase() === String(species).toLowerCase())
-    : -1;
+  const index = species ? team.findIndex((set) => String(set.species).toLowerCase() === String(species).toLowerCase()) : -1;
   if (index < 0) return "123456";
-  return [index, ...team.map((_, i) => i).filter((i) => i !== index)]
-    .map((i) => i + 1)
-    .join("");
+  return [index, ...team.map((_, i) => i).filter((i) => i !== index)].map((i) => i + 1).join("");
 }
-
-function parseWinner(log) {
-  return log.match(/\|win\|([^\n|]+)/)?.[1] ?? null;
-}
-
-function parseTurns(log) {
-  const matches = [...log.matchAll(/\|turn\|(\d+)/g)];
-  return matches.length ? Number(matches[matches.length - 1][1]) : 0;
-}
+function parseWinner(log) { return log.match(/\|win\|([^\n|]+)/)?.[1] ?? null; }
+function parseTurns(log) { const matches = [...log.matchAll(/\|turn\|(\d+)/g)]; return matches.length ? Number(matches[matches.length - 1][1]) : 0; }
