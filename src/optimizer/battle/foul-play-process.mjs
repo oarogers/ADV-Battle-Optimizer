@@ -11,6 +11,7 @@ export class FoulPlayProcess {
     this.child = null;
     this.ready = false;
     this.waiters = [];
+    this.stderr = "";
   }
 
   start({ format, userTeam, opponentTeam }) {
@@ -18,6 +19,7 @@ export class FoulPlayProcess {
       ? path.join(this.root, ".venv", "Scripts", "python.exe")
       : path.join(this.root, ".venv", "bin", "python");
     const script = path.join(this.root, "bridge", "foul_play_bridge.py");
+    this.stderr = "";
     this.child = spawn(python, [script], {
       cwd: this.root,
       env: {
@@ -27,11 +29,18 @@ export class FoulPlayProcess {
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child.stderr.on("data", (chunk) => {
-      if (process.env.DEBUG_FOUL_PLAY) process.stderr.write(`[foul-play ${this.side}] ${chunk}`);
+      const text = chunk.toString();
+      this.stderr += text;
+      if (process.env.DEBUG_FOUL_PLAY) process.stderr.write(`[foul-play ${this.side}] ${text}`);
     });
     this.child.on("error", (error) => this.rejectAll(error));
-    this.child.on("exit", (code) => {
-      if (code !== 0) this.rejectAll(new Error(`Foul Play ${this.side} exited with code ${code}`));
+    this.child.on("exit", (code, signal) => {
+      if (code !== 0) {
+        const detail = this.stderr.trim();
+        this.rejectAll(new Error(
+          `Foul Play ${this.side} exited with code ${code}${signal ? ` (${signal})` : ""}${detail ? `: ${detail}` : ""}`,
+        ));
+      }
     });
     const reader = createInterface({ input: this.child.stdout });
     reader.on("line", (line) => this.handleMessage(line));
