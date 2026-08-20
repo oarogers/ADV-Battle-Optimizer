@@ -1,11 +1,7 @@
 """
 Direct Showdown-protocol -> Foul Play search bridge.
-
 Reads JSONL commands from stdin and emits JSONL events on stdout.
-The bridge runs inside the Foul Play checkout so its package/data/dependencies
-are importable.
 """
-
 import asyncio
 import json
 import logging
@@ -39,16 +35,13 @@ class Bridge:
     def normalize_team(team):
         if not isinstance(team, list):
             raise ValueError("Foul Play team must be a list of sets")
-
         normalized = []
         for index, pokemon in enumerate(team):
             if not isinstance(pokemon, dict):
                 raise ValueError(f"Foul Play team slot {index + 1} is not an object")
-
             species = pokemon.get("species") or pokemon.get("name")
             if not isinstance(species, str) or not species.strip():
                 raise ValueError(f"Foul Play team slot {index + 1} has no species")
-
             evs = pokemon.get("evs") or {}
             normalized.append({
                 "species": species.strip().lower(),
@@ -68,7 +61,6 @@ class Bridge:
         self.format = msg.get("format")
         if not isinstance(self.format, str) or not self.format.startswith("gen"):
             raise ValueError(f"invalid Foul Play format: {self.format!r}")
-
         spec = FormatSpec.from_format_string(self.format)
         if spec.gen_number == 0:
             raise ValueError(f"format does not contain a supported generation: {self.format!r}")
@@ -94,21 +86,12 @@ class Bridge:
         self.send({"type": "ready", "format": str(spec), "generation": spec.generation})
 
     async def initialize_from_first_turn(self):
-        if self.initialized:
+        if self.initialized or self.pending_request is None or self.pending_opponent_switch is None:
             return
-        if self.pending_request is None or self.pending_opponent_switch is None:
-            return
-        self.battle.start_non_team_preview_battle(
-            self.pending_request,
-            self.pending_opponent_switch,
-        )
-        unique = set(
-            [p.name for p in self.battle.user.reserve]
-            + [self.battle.user.active.name]
-        )
+        self.battle.start_non_team_preview_battle(self.pending_request, self.pending_opponent_switch)
+        unique = set([p.name for p in self.battle.user.reserve] + [self.battle.user.active.name])
         self.mode.smogon_sets.initialize(
-            FormatSpec.from_format_string(FoulPlayConfig.smogon_stats or self.format),
-            unique,
+            FormatSpec.from_format_string(FoulPlayConfig.smogon_stats or self.format), unique
         )
         self.mode.team_datasets.initialize(self.battle.format_spec, unique)
         self.initialized = True
@@ -117,9 +100,7 @@ class Bridge:
 
     @staticmethod
     def request_needs_decision(request):
-        if not request or request.get("wait"):
-            return False
-        if request.get("teamPreview"):
+        if not request or request.get("wait") or request.get("teamPreview"):
             return False
         return bool(request.get("active") or request.get("forceSwitch"))
 
@@ -139,15 +120,11 @@ class Bridge:
                     self.pending_request = request
                     self.battle.request_json = request
                     self.battle.rqid = rqid
-                    # Foul Play's protocol parser consumes the Showdown line
-                    # itself, so modifying only pending_request is insufficient.
-                    # Feed the parser the same request object containing rqid.
-                    line = f"{prefix}|request|{json.dumps(request, separators=(\',\', \':\'))}"
+                    line = f'{prefix}|request|{json.dumps(request, separators=(",", ":"))}'
                     request_seen = True
                 except json.JSONDecodeError:
                     pass
             normalized_lines.append(line)
-
             if line.startswith("|switch|"):
                 parts = line.split("|")
                 if len(parts) > 3 and parts[2].startswith(self.battle.opponent.name + "a:"):
@@ -158,15 +135,12 @@ class Bridge:
     async def message(self, chunk):
         if not self.battle:
             raise RuntimeError("bridge received Showdown data before init")
-
         lines = [x for x in chunk.splitlines() if x]
         request_seen, normalized_lines = self.capture_lines(lines)
-
         await self.initialize_from_first_turn()
         if not self.initialized:
             self.battle.msg_list.extend(normalized_lines)
             return
-
         action_required = False
         for line in normalized_lines:
             try:
@@ -175,10 +149,8 @@ class Bridge:
             except Exception:
                 if self.battle.turn and self.battle.started:
                     raise
-
         if request_seen and self.request_needs_decision(self.pending_request):
             action_required = True
-
         if action_required and not self.searching and not self.battle.wait:
             await self.recommend()
 
