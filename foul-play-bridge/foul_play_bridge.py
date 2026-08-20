@@ -154,6 +154,24 @@ class Bridge:
         if action_required and not self.searching and not self.battle.wait:
             await self.recommend()
 
+    @staticmethod
+    def normalize_decision(decision, format_name):
+        """Convert Foul Play's generic modern action suffixes to Gen 3 legality.
+
+        Foul Play's search can return a move with a modern optional mechanic
+        suffix even when the battle state is explicitly gen3. The underlying
+        move is still a legal ADV action; Gen 3 simply has no such mechanic.
+        Keep the move/switch and remove only the unsupported suffix.
+        """
+        if not isinstance(decision, str):
+            raise ValueError(f"Foul Play returned non-string decision: {decision!r}")
+        if format_name == "gen3ou":
+            tokens = decision.split()
+            modern_flags = {"terastallize", "zmove", "dynamax", "gigantamax"}
+            tokens = [token for token in tokens if token.lower() not in modern_flags]
+            return " ".join(tokens)
+        return decision
+
     async def recommend(self):
         self.searching = True
         try:
@@ -163,9 +181,10 @@ class Bridge:
             except asyncio.TimeoutError as exc:
                 raise RuntimeError("Foul Play move search exceeded 2000 ms; bridge aborting instead of hanging") from exc
             elapsed_ms = int((time.perf_counter() - start) * 1000)
+            normalized_decision = self.normalize_decision(decision[0], self.format)
             self.send({
                 "type": "recommendation",
-                "decision": decision[0],
+                "decision": normalized_decision,
                 "rqid": decision[1],
                 "elapsed_ms": elapsed_ms,
             })
