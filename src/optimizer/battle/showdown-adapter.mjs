@@ -1,8 +1,8 @@
 import pkg from "pokemon-showdown";
 import { BattleEngine, validateBattleRequest } from "./battle-engine.mjs";
 import { normalizeTeam } from "../domain/types.mjs";
-import { teamId, battleId, canonicalJson } from "../domain/identity.mjs";
 import { FoulPlayProcess, defaultFoulPlayRoot } from "./foul-play-process.mjs";
+import { teamId, battleId, canonicalJson } from "../domain/identity.mjs";
 
 const { BattleStream, Teams, TeamValidator, getPlayerStreams } = pkg;
 
@@ -47,21 +47,16 @@ export class ShowdownBattleEngine extends BattleEngine {
       p1: new FoulPlayProcess({ root: this.foulPlayRoot, side: "p1", timeoutMs: this.decisionTimeoutMs }),
       p2: new FoulPlayProcess({ root: this.foulPlayRoot, side: "p2", timeoutMs: this.decisionTimeoutMs }),
     };
+    const teams = { p1: ourTeam, p2: opponentTeam };
 
     const consume = async (side, playerStream) => {
       for await (const chunk of playerStream) {
         chunks[side].push(chunk);
         foulPlay[side].update(chunk);
 
-        // Team preview is a separate protocol phase. Foul Play's bridge is
-        // initialized for non-preview battle state, so select the first six
-        // slots here. Explicit leads are supported by selecting the requested
-        // slot when supplied; otherwise slot 1 is used as the deterministic
-        // default until lead optimization is added.
         if (chunk.includes("|teampreview|")) {
-          const requested = side === "p1" ? request.ourLead : request.opponentLead;
-          const index = requested ? ourTeam.indexOf(requested) + 1 : 1;
-          stream.write(`>${side} team ${index > 0 ? index : 1}`);
+          const requestedLead = side === "p1" ? request.ourLead : request.opponentLead;
+          stream.write(`>${side} team ${previewOrder(teams[side], requestedLead)}`);
           continue;
         }
 
@@ -85,11 +80,10 @@ export class ShowdownBattleEngine extends BattleEngine {
         consume("p2", playerStreams.p2),
       ]);
 
-      const protocolLog = chunks.p1.map((chunk) => `[p1]\n${chunk}`).concat(
-        chunks.p2.map((chunk) => `[p2]\n${chunk}`),
-      ).join("\n");
-      const winner = parseWinner(protocolLog);
-      const turns = parseTurns(protocolLog);
+      const protocolLog = [
+        ...chunks.p1.map((chunk) => `[p1]\n${chunk}`),
+        ...chunks.p2.map((chunk) => `[p2]\n${chunk}`),
+      ].join("\n");
 
       return {
         id,
@@ -97,9 +91,9 @@ export class ShowdownBattleEngine extends BattleEngine {
         ourTeamId,
         opponentTeamId,
         seed,
-        winner,
-        turns,
-        status: winner ? "complete" : "incomplete",
+        winner: parseWinner(protocolLog),
+        turns: parseTurns(protocolLog),
+        status: parseWinner(protocolLog) ? "complete" : "incomplete",
         protocolLog,
         engineVersion: pkg?.VERSION ?? "unknown",
         ai: "foul-play",
@@ -112,9 +106,19 @@ export class ShowdownBattleEngine extends BattleEngine {
   }
 }
 
+function previewOrder(team, lead) {
+  const species = lead?.species ?? lead?.name ?? lead;
+  const index = species
+    ? team.findIndex((set) => String(set.species).toLowerCase() === String(species).toLowerCase())
+    : -1;
+  if (index < 0) return "123456";
+  return [index, ...team.map((_, i) => i).filter((i) => i !== index)]
+    .map((i) => i + 1)
+    .join("");
+}
+
 function parseWinner(log) {
-  const match = log.match(/\|win\|([^\n|]+)/);
-  return match?.[1] ?? null;
+  return log.match(/\|win\|([^\n|]+)/)?.[1] ?? null;
 }
 
 function parseTurns(log) {
