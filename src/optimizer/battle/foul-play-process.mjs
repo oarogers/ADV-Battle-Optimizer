@@ -16,12 +16,17 @@ export class FoulPlayProcess {
     this.stderr = "";
   }
 
+  debug(message) {
+    if (process.env.DEBUG_FOUL_PLAY) process.stderr.write(`[foul-play ${this.side}] ${message}\n`);
+  }
+
   start({ format, userTeam, opponentTeam }) {
     const python = process.platform === "win32"
       ? path.join(this.root, ".venv", "Scripts", "python.exe")
       : path.join(this.root, ".venv", "bin", "python");
     const script = path.join(this.root, "bridge", "foul_play_bridge.py");
     this.stderr = "";
+    this.debug(`starting ${python}`);
     this.child = spawn(python, [script], {
       cwd: this.root,
       env: {
@@ -45,7 +50,10 @@ export class FoulPlayProcess {
       this.rejectReady(error);
     });
     const reader = createInterface({ input: this.child.stdout });
-    reader.on("line", (line) => this.handleMessage(line));
+    reader.on("line", (line) => {
+      this.debug(`stdout: ${line}`);
+      this.handleMessage(line);
+    });
     this.send({
       type: "init",
       format,
@@ -57,6 +65,7 @@ export class FoulPlayProcess {
       search_parallelism: 1,
       search_threads: 1,
     });
+    this.debug("init sent");
   }
 
   handleMessage(line) {
@@ -64,6 +73,7 @@ export class FoulPlayProcess {
     try { msg = JSON.parse(line); } catch { return; }
     if (msg.type === "ready") {
       this.ready = true;
+      this.debug(`ready: ${msg.format}/${msg.generation}`);
       for (const waiter of this.readyWaiters.splice(0)) {
         clearTimeout(waiter.timer);
         waiter.resolve(msg);
@@ -91,6 +101,7 @@ export class FoulPlayProcess {
 
   async waitUntilReady(timeoutMs = 10_000) {
     if (this.ready) return;
+    this.debug(`waiting for ready (${timeoutMs}ms)`);
     await new Promise((resolve, reject) => {
       const waiter = {
         resolve,
@@ -98,7 +109,7 @@ export class FoulPlayProcess {
         timer: setTimeout(() => {
           const index = this.readyWaiters.indexOf(waiter);
           if (index >= 0) this.readyWaiters.splice(index, 1);
-          reject(new Error(`Timed out waiting for Foul Play ${this.side} initialization`));
+          reject(new Error(`Timed out waiting for Foul Play ${this.side} initialization after ${timeoutMs}ms. stderr=${this.stderr.trim() || "<empty>"}`));
         }, timeoutMs),
       };
       this.readyWaiters.push(waiter);
