@@ -73,26 +73,39 @@ class Bridge:
         from fp.battle.protocol import process_battle_updates
         process_battle_updates(self.battle)
 
+    @staticmethod
+    def request_needs_decision(request):
+        if not request or request.get("wait"):
+            return False
+        if request.get("teamPreview"):
+            return False
+        return bool(request.get("active") or request.get("forceSwitch"))
+
     async def message(self, chunk):
         if not self.battle:
             raise RuntimeError("bridge received Showdown data before init")
+
         lines = [x for x in chunk.splitlines() if x]
+        request_seen = False
         for line in lines:
             if "|request|" in line:
                 try:
                     self.pending_request = json.loads(line.split("|request|", 1)[1])
                     self.battle.request_json = self.pending_request
                     self.battle.rqid = self.pending_request.get("rqid")
+                    request_seen = True
                 except json.JSONDecodeError:
                     pass
             if line.startswith("|switch|"):
                 parts = line.split("|")
                 if len(parts) > 3 and parts[2] == self.battle.opponent.name:
                     self.pending_opponent_switch = line
+
         await self.initialize_from_first_turn()
         if not self.initialized:
             self.battle.msg_list.extend(lines)
             return
+
         action_required = False
         for line in lines:
             try:
@@ -101,6 +114,14 @@ class Bridge:
             except Exception:
                 if self.battle.turn and self.battle.started:
                     raise
+
+        # Foul Play's protocol updater does not always report the action
+        # requirement for a standalone Showdown request message. The request
+        # itself is authoritative: if Showdown is asking this side for an
+        # active move/switch and the battle is ready, search for a decision.
+        if request_seen and self.request_needs_decision(self.pending_request):
+            action_required = True
+
         if action_required and not self.searching and not self.battle.wait:
             await self.recommend()
 
