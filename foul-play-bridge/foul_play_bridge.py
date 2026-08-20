@@ -35,11 +35,23 @@ class Bridge:
         sys.stdout.flush()
 
     def init(self, msg):
-        self.format = msg["format"]
-        self.mode = StandardBattleMode()
-        self.battle = Battle("bridge-gen3")
-        self.battle.pokemon_format = self.format
+        self.format = msg.get("format")
+        if not isinstance(self.format, str) or not self.format.startswith("gen"):
+            raise ValueError(f"invalid Foul Play format: {self.format!r}")
+
         spec = FormatSpec.from_format_string(self.format)
+        if spec.gen_number == 0:
+            raise ValueError(f"format does not contain a supported generation: {self.format!r}")
+
+        # Foul Play's search/data layers read the active format from its
+        # process-wide config. Setting Battle.generation alone is not enough:
+        # current_generation_mechanics() consults FoulPlayConfig.format_spec.
+        FoulPlayConfig.format_spec = spec
+        FoulPlayConfig.smogon_stats = spec.base_name
+
+        self.mode = StandardBattleMode()
+        self.battle = Battle("bridge")
+        self.battle.pokemon_format = self.format
         self.battle.generation = spec.generation
         self.battle.battle_type = spec.battle_type
         self.battle.mode = self.mode
@@ -49,7 +61,7 @@ class Bridge:
         self.battle.opponent.account_name = "FoulPlayOptimizer"
         self.battle.user.team_dict = msg.get("user_team")
         self.battle.opponent.team_dict = msg.get("opponent_team")
-        self.send({"type": "ready"})
+        self.send({"type": "ready", "format": str(spec), "generation": spec.generation})
 
     async def initialize_from_first_turn(self):
         if self.initialized:
