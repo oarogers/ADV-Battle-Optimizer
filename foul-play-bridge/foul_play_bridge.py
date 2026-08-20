@@ -34,6 +34,43 @@ class Bridge:
         sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
         sys.stdout.flush()
 
+    @staticmethod
+    def normalize_team(team):
+        """Convert optimizer sets to the team_dict representation Foul Play expects.
+
+        Foul Play's battle parser stores species names in its canonical lowercase
+        form (e.g. ``tyranitar``), and state.py matches team_dict species exactly.
+        The optimizer's domain model intentionally uses display-case names, so the
+        adapter owns this representation conversion rather than leaking it into the
+        rest of the application.
+        """
+        if not isinstance(team, list):
+            raise ValueError("Foul Play team must be a list of sets")
+
+        normalized = []
+        for index, pokemon in enumerate(team):
+            if not isinstance(pokemon, dict):
+                raise ValueError(f"Foul Play team slot {index + 1} is not an object")
+
+            species = pokemon.get("species") or pokemon.get("name")
+            if not isinstance(species, str) or not species.strip():
+                raise ValueError(f"Foul Play team slot {index + 1} has no species")
+
+            evs = pokemon.get("evs") or {}
+            normalized.append({
+                "species": species.strip().lower(),
+                "nature": pokemon.get("nature") or "serious",
+                "evs": {
+                    "hp": int(evs.get("hp") or 0),
+                    "atk": int(evs.get("atk") or 0),
+                    "def": int(evs.get("def") or 0),
+                    "spa": int(evs.get("spa") or 0),
+                    "spd": int(evs.get("spd") or 0),
+                    "spe": int(evs.get("spe") or 0),
+                },
+            })
+        return normalized
+
     def init(self, msg):
         self.format = msg.get("format")
         if not isinstance(self.format, str) or not self.format.startswith("gen"):
@@ -43,9 +80,6 @@ class Bridge:
         if spec.gen_number == 0:
             raise ValueError(f"format does not contain a supported generation: {self.format!r}")
 
-        # Foul Play's format_spec is a read-only property derived from
-        # pokemon_format. Configure the singleton through that source field.
-        # The search/data layers use FoulPlayConfig.format_spec globally.
         FoulPlayConfig.pokemon_format = self.format
         FoulPlayConfig.smogon_stats = msg.get("smogon_stats_format") or spec.base_name
         FoulPlayConfig.search_time_ms = int(msg.get("search_time_ms", 100))
@@ -62,8 +96,8 @@ class Bridge:
         self.battle.opponent.name = msg.get("opponent_side", "p2")
         self.battle.user.account_name = "FoulPlayOptimizer"
         self.battle.opponent.account_name = "FoulPlayOptimizer"
-        self.battle.user.team_dict = msg.get("user_team")
-        self.battle.opponent.team_dict = msg.get("opponent_team")
+        self.battle.user.team_dict = self.normalize_team(msg.get("user_team"))
+        self.battle.opponent.team_dict = self.normalize_team(msg.get("opponent_team"))
         self.send({"type": "ready", "format": str(spec), "generation": spec.generation})
 
     async def initialize_from_first_turn(self):
