@@ -11,12 +11,24 @@ for (const [name, team] of [["Team 1", team1], ["Team 2", team2]]) {
 }
 
 const foulPlayDir = new URL("../foul-play-src/", import.meta.url);
+const foulPlayPath = foulPlayDir.pathname;
 const python = process.platform === "win32"
   ? new URL("../foul-play-src/.venv/Scripts/python.exe", import.meta.url).pathname
   : new URL("../foul-play-src/.venv/bin/python", import.meta.url).pathname;
 
+// Python puts the script's directory (bridge/) on sys.path, not its working
+// directory. Foul Play's package lives at foul-play-src/fp, so explicitly add
+// the checkout root to PYTHONPATH instead of relying on cwd being importable.
+const env = {
+  ...process.env,
+  PYTHONPATH: process.platform === "win32"
+    ? `${foulPlayPath};${process.env.PYTHONPATH ?? ""}`
+    : `${foulPlayPath}:${process.env.PYTHONPATH ?? ""}`,
+};
+
 const bridge = spawn(python, ["bridge/foul_play_bridge.py"], {
   cwd: foulPlayDir,
+  env,
   stdio: ["pipe", "pipe", "inherit"],
 });
 
@@ -41,6 +53,10 @@ bridgeReader.on("line", (line) => {
   } catch {
     console.error("[bridge raw]", line);
   }
+});
+
+bridge.on("error", (err) => {
+  console.error("[bridge process error]", err);
 });
 
 function bridgeSend(obj) {
