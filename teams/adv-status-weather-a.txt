@@ -1,0 +1,53 @@
+Tyranitar @ Leftovers
+Ability: Sand Stream
+EVs: 252 HP / 88 Atk / 168 Spe
+Adamant Nature
+- Rock Slide
+- Earthquake
+- Pursuit
+- Thunder Wave
+
+Celebi @ Leftovers
+Ability: Natural Cure
+EVs: 252 HP / 220 Def / 36 Spe
+Bold Nature
+- Leech Seed
+- Recover
+- Psychic
+- Thunder Wave
+
+Suicune @ Leftovers
+Ability: Pressure
+EVs: 252 HP / 252 Def / 4 Spe
+Bold Nature
+- Surf
+- Calm Mind
+- Rest
+- Sleep Talk
+
+Zapdos @ Leftovers
+Ability: Pressure
+EVs: 252 HP / 220 Def / 36 Spe
+Bold Nature
+- Thunderbolt
+- Hidden Power Grass
+- Thunder Wave
+- Roar
+
+Blissey (F) @ Leftovers
+Ability: Natural Cure
+EVs: 252 Def / 252 SpD / 4 Spe
+Calm Nature
+- Soft-Boiled
+- Seismic Toss
+- Toxic
+- Aromatherapy
+
+Metagross @ Leftovers
+Ability: Clear Body
+EVs: 252 HP / 236 Atk / 20 Spe
+Adamant Nature
+- Meteor Mash
+- Earthquake
+- Explosion
+- Agility
