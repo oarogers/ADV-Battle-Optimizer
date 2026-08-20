@@ -39,21 +39,38 @@ export class ShowdownBattleEngine extends BattleEngine {
       p2: new FoulPlayProcess({ root: this.foulPlayRoot, side: "p2", timeoutMs: this.decisionTimeoutMs }),
     };
     const teams = { p1: ourTeam, p2: opponentTeam };
+    let battleFinished = false;
 
     const consume = async (side, playerStream) => {
       for await (const chunk of playerStream) {
         chunks[side].push(chunk);
+
+        // BattleStream player streams are not guaranteed to close immediately
+        // after a terminal message. Stop consuming as soon as Showdown declares
+        // a winner/tie so the smoke test cannot wait forever for stream closure.
+        if (chunk.includes("|win|") || chunk.includes("|tie|")) {
+          battleFinished = true;
+          continue;
+        }
+        if (battleFinished) continue;
+
         const isRequest = chunk.includes("|request|");
         const waiter = isRequest ? foulPlay[side].waitForRecommendation() : null;
         foulPlay[side].update(chunk);
+
         if (chunk.includes("|teampreview|")) {
           const requestedLead = side === "p1" ? request.ourLead : request.opponentLead;
           stream.write(`>${side} team ${previewOrder(teams[side], requestedLead)}`);
           continue;
         }
+
         if (waiter) {
           const decision = await waiter;
-          if (decision.decision) stream.write(`>${side} ${decision.decision}`);
+          if (battleFinished) continue;
+          if (decision.decision) {
+            const safeDecision = validateAdvDecision(decision.decision, this.format);
+            stream.write(`>${side} ${safeDecision}`);
+          }
         }
       }
     };
@@ -62,9 +79,6 @@ export class ShowdownBattleEngine extends BattleEngine {
       foulPlay.p1.start({ format: this.format, userTeam: ourTeam, opponentTeam });
       foulPlay.p2.start({ format: this.format, userTeam: opponentTeam, opponentTeam: ourTeam });
 
-      // Establish both Python bridges before sending any Showdown protocol.
-      // This prevents early protocol chunks from being lost while Foul Play is
-      // still constructing its battle/search state.
       await Promise.all([foulPlay.p1.waitUntilReady(), foulPlay.p2.waitUntilReady()]);
 
       stream.write(`>start ${JSON.stringify({ formatid: this.format, seed })}`);
@@ -89,5 +103,15 @@ function previewOrder(team, lead) {
   if (index < 0) return "123456";
   return [index, ...team.map((_, i) => i).filter((i) => i !== index)].map((i) => i + 1).join("");
 }
+
+function validateAdvDecision(decision, format) {
+  if (format !== "gen3ou") return decision;
+  const normalized = String(decision).trim();
+  if (/\bterastallize\b/i.test(normalized) || /\bmega\b/i.test(normalized) || /\bzmove\b/i.test(normalized) || /\bdynamax\b/i.test(normalized)) {
+    throw new Error(`Foul Play produced a non-ADV action for ${format}: ${normalized}`);
+  }
+  return normalized;
+}
+
 function parseWinner(log) { return log.match(/\|win\|([^\n|]+)/)?.[1] ?? null; }
 function parseTurns(log) { const matches = [...log.matchAll(/\|turn\|(\d+)/g)]; return matches.length ? Number(matches[matches.length - 1][1]) : 0; }
