@@ -130,7 +130,20 @@ function validateAdvDecision(decision, format) {
   let normalized = String(decision).trim();
   if (normalized.startsWith("/choose ")) normalized = normalized.slice("/choose ".length).trim();
   if (normalized === "/choose") normalized = "";
+
+  // Foul Play emits slash-prefixed client commands (e.g. `/switch 4`),
+  // while BattleStream expects the command without the slash after the
+  // player prefix (`>p1 switch 4`).
+  if (normalized.startsWith("/")) normalized = normalized.slice(1).trim();
+
   if (format !== "gen3ou") return normalized;
+
+  // Foul Play can occasionally append a modern battle gimmick to a move
+  // recommendation even when its format is gen3ou. ADV has no such suffix;
+  // remove only a trailing gimmick token so legitimate move names such as
+  // Mega Drain are left intact.
+  normalized = normalized.replace(/\s+(terastallize|mega|zmove|dynamax)\s*$/i, "").trim();
+
   if (/\bterastallize\b/i.test(normalized) || /\bmega\b/i.test(normalized) || /\bzmove\b/i.test(normalized) || /\bdynamax\b/i.test(normalized)) {
     throw new Error(`Foul Play produced a non-ADV action for ${format}: ${normalized}`);
   }
