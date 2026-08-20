@@ -1,7 +1,9 @@
 import { team1, team2 } from "../../teams.mjs";
 import { ShowdownBattleEngine } from "./showdown-adapter.mjs";
 
-const engine = new ShowdownBattleEngine({ decisionTimeoutMs: 120_000 });
+// Milestone smoke test: keep Foul Play's search intentionally tiny so this
+// verifies the complete Showdown -> Foul Play -> Showdown loop quickly.
+const engine = new ShowdownBattleEngine({ decisionTimeoutMs: 15_000 });
 const result = await engine.run({
   format: "gen3ou",
   ourTeam: team1,
