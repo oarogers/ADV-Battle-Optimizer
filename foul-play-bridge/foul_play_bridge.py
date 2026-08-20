@@ -158,7 +158,10 @@ class Bridge:
         self.searching = True
         try:
             start = time.perf_counter()
-            decision = await async_pick_move(self.battle)
+            try:
+                decision = await asyncio.wait_for(async_pick_move(self.battle), timeout=2.0)
+            except asyncio.TimeoutError as exc:
+                raise RuntimeError("Foul Play move search exceeded 2000 ms; bridge aborting instead of hanging") from exc
             elapsed_ms = int((time.perf_counter() - start) * 1000)
             self.send({
                 "type": "recommendation",
