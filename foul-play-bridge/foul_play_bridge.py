@@ -43,17 +43,18 @@ class Bridge:
             if not isinstance(species, str) or not species.strip():
                 raise ValueError(f"Foul Play team slot {index + 1} has no species")
             evs = pokemon.get("evs") or {}
+            ivs = pokemon.get("ivs") or {}
             normalized.append({
-                "species": species.strip().lower(),
-                "nature": pokemon.get("nature") or "serious",
-                "evs": {
-                    "hp": int(evs.get("hp") or 0),
-                    "atk": int(evs.get("atk") or 0),
-                    "def": int(evs.get("def") or 0),
-                    "spa": int(evs.get("spa") or 0),
-                    "spd": int(evs.get("spd") or 0),
-                    "spe": int(evs.get("spe") or 0),
-                },
+                "name": pokemon.get("name") or species,
+                "species": species.strip(),
+                "item": pokemon.get("item") or "",
+                "ability": pokemon.get("ability") or "",
+                "moves": [str(move) for move in (pokemon.get("moves") or []) if move],
+                "nature": pokemon.get("nature") or "Serious",
+                "evs": {stat: int(evs.get(stat) or 0) for stat in ("hp", "atk", "def", "spa", "spd", "spe")},
+                "ivs": {stat: int(ivs.get(stat) if ivs.get(stat) is not None else 31) for stat in ("hp", "atk", "def", "spa", "spd", "spe")},
+                "level": int(pokemon.get("level") or 100),
+                **{key: pokemon[key] for key in ("gender", "shiny", "happiness") if key in pokemon},
             })
         return normalized
 
@@ -90,9 +91,7 @@ class Bridge:
             return
         self.battle.start_non_team_preview_battle(self.pending_request, self.pending_opponent_switch)
         unique = set([p.name for p in self.battle.user.reserve] + [self.battle.user.active.name])
-        self.mode.smogon_sets.initialize(
-            FormatSpec.from_format_string(FoulPlayConfig.smogon_stats or self.format), unique
-        )
+        self.mode.smogon_sets.initialize(FormatSpec.from_format_string(FoulPlayConfig.smogon_stats or self.format), unique)
         self.mode.team_datasets.initialize(self.battle.format_spec, unique)
         self.initialized = True
         from fp.battle.protocol import process_battle_updates
@@ -109,27 +108,26 @@ class Bridge:
         normalized_lines = []
         for line in lines:
             if "|request|" in line:
+                prefix, payload = line.split("|request|", 1)
                 try:
-                    prefix, payload = line.split("|request|", 1)
                     request = json.loads(payload)
-                    rqid = request.get("rqid")
-                    if rqid is None:
-                        rqid = self.next_rqid
-                        self.next_rqid += 1
-                        request["rqid"] = rqid
-                    self.pending_request = request
-                    self.battle.request_json = request
-                    self.battle.rqid = rqid
-                    line = f'{prefix}|request|{json.dumps(request, separators=(",", ":"))}'
-                    request_seen = True
-                except json.JSONDecodeError:
-                    pass
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Malformed Showdown request JSON: {exc}") from exc
+                rqid = request.get("rqid")
+                if rqid is None:
+                    rqid = self.next_rqid
+                    self.next_rqid += 1
+                    request["rqid"] = rqid
+                self.pending_request = request
+                self.battle.request_json = request
+                self.battle.rqid = rqid
+                line = f'{prefix}|request|{json.dumps(request, separators=(",", ":"))}'
+                request_seen = True
             normalized_lines.append(line)
             if line.startswith("|switch|"):
                 parts = line.split("|")
-                if len(parts) > 3 and parts[2].startswith(self.battle.opponent.name + "a:"):
-                    if self.pending_opponent_switch is None:
-                        self.pending_opponent_switch = line
+                if len(parts) > 3 and parts[2].startswith(self.battle.opponent.name + "a:") and self.pending_opponent_switch is None:
+                    self.pending_opponent_switch = line
         return request_seen, normalized_lines
 
     async def message(self, chunk):
@@ -143,38 +141,12 @@ class Bridge:
             return
         action_required = False
         for line in normalized_lines:
-            try:
-                required = await async_update_battle(self.battle, line)
-                action_required = action_required or bool(required)
-            except Exception:
-                if self.battle.turn and self.battle.started:
-                    raise
-        # The Showdown request is authoritative. Foul Play's internal `wait`
-        # flag can remain set after Roar/forced-switch sequences even though
-        # Showdown is explicitly asking this side for its next action. Do not
-        # let that stale internal flag suppress a valid request.
+            required = await async_update_battle(self.battle, line)
+            action_required = action_required or bool(required)
         if request_seen and self.request_needs_decision(self.pending_request):
             action_required = True
         if action_required and not self.searching:
             await self.recommend()
-
-    @staticmethod
-    def normalize_decision(decision, format_name):
-        """Convert Foul Play's generic modern action suffixes to Gen 3 legality.
-
-        Foul Play's search can return a move with a modern optional mechanic
-        suffix even when the battle state is explicitly gen3. The underlying
-        move is still a legal ADV action; Gen 3 simply has no such mechanic.
-        Keep the move/switch and remove only the unsupported suffix.
-        """
-        if not isinstance(decision, str):
-            raise ValueError(f"Foul Play returned non-string decision: {decision!r}")
-        if format_name == "gen3ou":
-            tokens = decision.split()
-            modern_flags = {"terastallize", "zmove", "dynamax", "gigantamax"}
-            tokens = [token for token in tokens if token.lower() not in modern_flags]
-            return " ".join(tokens)
-        return decision
 
     async def recommend(self):
         self.searching = True
@@ -185,13 +157,9 @@ class Bridge:
             except asyncio.TimeoutError as exc:
                 raise RuntimeError("Foul Play move search exceeded 2000 ms; bridge aborting instead of hanging") from exc
             elapsed_ms = int((time.perf_counter() - start) * 1000)
-            normalized_decision = self.normalize_decision(decision[0], self.format)
-            self.send({
-                "type": "recommendation",
-                "decision": normalized_decision,
-                "rqid": decision[1],
-                "elapsed_ms": elapsed_ms,
-            })
+            if not decision or not isinstance(decision[0], str):
+                raise RuntimeError(f"Foul Play returned an invalid decision: {decision!r}")
+            self.send({"type": "recommendation", "decision": decision[0], "rqid": decision[1], "elapsed_ms": elapsed_ms})
         finally:
             self.searching = False
 
@@ -212,9 +180,10 @@ async def main():
             elif msg["type"] == "ping":
                 bridge.send({"type": "pong"})
             else:
-                bridge.send({"type": "error", "error": "unknown message type"})
+                raise ValueError(f"unknown message type: {msg.get('type')!r}")
         except Exception as exc:
             bridge.send({"type": "error", "error": f"{type(exc).__name__}: {exc}"})
+            raise
 
 
 if __name__ == "__main__":
