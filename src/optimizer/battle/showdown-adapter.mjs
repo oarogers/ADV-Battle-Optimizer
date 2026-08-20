@@ -52,6 +52,14 @@ export class ShowdownBattleEngine extends BattleEngine {
     const consume = async (side, playerStream) => {
       for await (const chunk of playerStream) {
         chunks[side].push(chunk);
+
+        // Register the waiter BEFORE sending the request to Foul Play. The old
+        // ordering had a race: a fast Foul Play response could arrive before
+        // waitForRecommendation() installed its waiter, causing the response
+        // to be dropped and the battle to appear hung.
+        const isRequest = chunk.includes("|request|");
+        const waiter = isRequest ? foulPlay[side].waitForRecommendation() : null;
+
         foulPlay[side].update(chunk);
 
         if (chunk.includes("|teampreview|")) {
@@ -60,8 +68,8 @@ export class ShowdownBattleEngine extends BattleEngine {
           continue;
         }
 
-        if (chunk.includes("|request|")) {
-          const decision = await foulPlay[side].waitForRecommendation();
+        if (waiter) {
+          const decision = await waiter;
           if (decision.decision) stream.write(`>${side} ${decision.decision}`);
         }
       }
