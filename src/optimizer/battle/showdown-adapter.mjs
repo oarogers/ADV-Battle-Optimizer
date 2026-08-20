@@ -39,19 +39,16 @@ export class ShowdownBattleEngine extends BattleEngine {
       p2: new FoulPlayProcess({ root: this.foulPlayRoot, side: "p2", timeoutMs: this.decisionTimeoutMs }),
     };
     const teams = { p1: ourTeam, p2: opponentTeam };
-    let battleFinished = false;
 
     const consume = async (side, playerStream) => {
       for await (const chunk of playerStream) {
         chunks[side].push(chunk);
+
+        // The player stream may remain open after Showdown declares the result.
+        // Returning here is what allows Promise.all() to resolve.
         if (chunk.includes("|win|") || chunk.includes("|tie|")) {
-          battleFinished = true;
-          // A BattleStream player iterator may remain open after the terminal
-          // protocol message. Return immediately; the battle result is already
-          // fully represented by the chunks received so far.
           return;
         }
-        if (battleFinished) return;
 
         const isRequest = chunk.includes("|request|");
         const waiter = isRequest ? foulPlay[side].waitForRecommendation() : null;
@@ -65,7 +62,6 @@ export class ShowdownBattleEngine extends BattleEngine {
 
         if (waiter) {
           const decision = await waiter;
-          if (battleFinished) return;
           if (decision.decision) {
             const safeDecision = validateAdvDecision(decision.decision, this.format);
             stream.write(`>${side} ${safeDecision}`);
@@ -84,9 +80,6 @@ export class ShowdownBattleEngine extends BattleEngine {
       stream.write(`>player p1 ${JSON.stringify({ name: "Optimizer", team: Teams.pack(ourTeam) })}`);
       stream.write(`>player p2 ${JSON.stringify({ name: "Opponent", team: Teams.pack(opponentTeam) })}`);
 
-      // Once Showdown has declared a result, the player iterators are allowed
-      // to remain open internally. Do not make battle completion depend on
-      // those iterators closing.
       await Promise.race([
         Promise.all([consume("p1", playerStreams.p1), consume("p2", playerStreams.p2)]),
         waitForBattleCompletion(15_000),
@@ -114,8 +107,14 @@ function previewOrder(team, lead) {
 }
 
 function validateAdvDecision(decision, format) {
-  if (format !== "gen3ou") return decision;
-  const normalized = String(decision).trim();
+  let normalized = String(decision).trim();
+
+  // Foul Play returns Showdown command strings with an optional /choose prefix,
+  // while BattleStream's player input expects the command without that prefix.
+  if (normalized.startsWith("/choose ")) normalized = normalized.slice("/choose ".length).trim();
+  if (normalized === "/choose") normalized = "";
+
+  if (format !== "gen3ou") return normalized;
   if (/\bterastallize\b/i.test(normalized) || /\bmega\b/i.test(normalized) || /\bzmove\b/i.test(normalized) || /\bdynamax\b/i.test(normalized)) {
     throw new Error(`Foul Play produced a non-ADV action for ${format}: ${normalized}`);
   }
