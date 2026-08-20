@@ -39,32 +39,45 @@ export class ShowdownBattleEngine extends BattleEngine {
       p2: new FoulPlayProcess({ root: this.foulPlayRoot, side: "p2", timeoutMs: this.decisionTimeoutMs }),
     };
     const teams = { p1: ourTeam, p2: opponentTeam };
+    let battleFinished = false;
+
+    const debug = (message) => {
+      if (process.env.DEBUG_SHOWDOWN) process.stderr.write(`[showdown] ${message}\n`);
+    };
 
     const consume = async (side, playerStream) => {
       for await (const chunk of playerStream) {
         chunks[side].push(chunk);
+        debug(`${side} <- ${JSON.stringify(chunk)}`);
 
-        // The player stream may remain open after Showdown declares the result.
-        // Returning here is what allows Promise.all() to resolve.
         if (chunk.includes("|win|") || chunk.includes("|tie|")) {
+          battleFinished = true;
+          debug(`${side}: terminal result received`);
           return;
         }
 
         const isRequest = chunk.includes("|request|");
+        // Install the waiter before updating Foul Play: the bridge can answer
+        // synchronously for a very cheap search.
         const waiter = isRequest ? foulPlay[side].waitForRecommendation() : null;
         foulPlay[side].update(chunk);
 
         if (chunk.includes("|teampreview|")) {
           const requestedLead = side === "p1" ? request.ourLead : request.opponentLead;
-          stream.write(`>${side} team ${previewOrder(teams[side], requestedLead)}`);
+          const command = `>${side} team ${previewOrder(teams[side], requestedLead)}`;
+          debug(`${side} -> ${command}`);
+          stream.write(command);
           continue;
         }
 
         if (waiter) {
           const decision = await waiter;
+          if (battleFinished) return;
           if (decision.decision) {
             const safeDecision = validateAdvDecision(decision.decision, this.format);
-            stream.write(`>${side} ${safeDecision}`);
+            const command = `>${side} ${safeDecision}`;
+            debug(`${side} -> ${command}`);
+            stream.write(command);
           }
         }
       }
@@ -76,13 +89,14 @@ export class ShowdownBattleEngine extends BattleEngine {
 
       await Promise.all([foulPlay.p1.waitUntilReady(), foulPlay.p2.waitUntilReady()]);
 
+      debug(`start format=${this.format} seed=${JSON.stringify(seed)}`);
       stream.write(`>start ${JSON.stringify({ formatid: this.format, seed })}`);
       stream.write(`>player p1 ${JSON.stringify({ name: "Optimizer", team: Teams.pack(ourTeam) })}`);
       stream.write(`>player p2 ${JSON.stringify({ name: "Opponent", team: Teams.pack(opponentTeam) })}`);
 
       await Promise.race([
         Promise.all([consume("p1", playerStreams.p1), consume("p2", playerStreams.p2)]),
-        waitForBattleCompletion(15_000),
+        waitForBattleCompletion(15_000, chunks),
       ]);
 
       const protocolLog = [...chunks.p1.map((chunk) => `[p1]\n${chunk}`), ...chunks.p2.map((chunk) => `[p2]\n${chunk}`)].join("\n");
@@ -95,8 +109,14 @@ export class ShowdownBattleEngine extends BattleEngine {
   }
 }
 
-function waitForBattleCompletion(ms) {
-  return new Promise((_, reject) => setTimeout(() => reject(new Error(`Showdown battle did not complete within ${ms} ms`)), ms));
+function waitForBattleCompletion(ms, chunks) {
+  return new Promise((_, reject) => setTimeout(() => {
+    const recent = [
+      ...chunks.p1.slice(-3).map((chunk) => `[p1] ${chunk}`),
+      ...chunks.p2.slice(-3).map((chunk) => `[p2] ${chunk}`),
+    ].join("\n");
+    reject(new Error(`Showdown battle did not complete within ${ms} ms. Last protocol chunks:\n${recent || "<none>"}`));
+  }, ms));
 }
 
 function previewOrder(team, lead) {
@@ -108,12 +128,8 @@ function previewOrder(team, lead) {
 
 function validateAdvDecision(decision, format) {
   let normalized = String(decision).trim();
-
-  // Foul Play returns Showdown command strings with an optional /choose prefix,
-  // while BattleStream's player input expects the command without that prefix.
   if (normalized.startsWith("/choose ")) normalized = normalized.slice("/choose ".length).trim();
   if (normalized === "/choose") normalized = "";
-
   if (format !== "gen3ou") return normalized;
   if (/\bterastallize\b/i.test(normalized) || /\bmega\b/i.test(normalized) || /\bzmove\b/i.test(normalized) || /\bdynamax\b/i.test(normalized)) {
     throw new Error(`Foul Play produced a non-ADV action for ${format}: ${normalized}`);
