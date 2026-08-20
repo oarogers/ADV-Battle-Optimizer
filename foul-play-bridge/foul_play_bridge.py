@@ -125,14 +125,12 @@ class Bridge:
 
     def capture_lines(self, lines):
         request_seen = False
+        normalized_lines = []
         for line in lines:
             if "|request|" in line:
                 try:
-                    request = json.loads(line.split("|request|", 1)[1])
-                    # The local Showdown adapter used by the optimizer does not
-                    # always include rqid. Foul Play's protocol code requires the
-                    # field, so preserve a real Showdown rqid when present and use
-                    # a monotonically increasing adapter-local id otherwise.
+                    prefix, payload = line.split("|request|", 1)
+                    request = json.loads(payload)
                     rqid = request.get("rqid")
                     if rqid is None:
                         rqid = self.next_rqid
@@ -141,31 +139,36 @@ class Bridge:
                     self.pending_request = request
                     self.battle.request_json = request
                     self.battle.rqid = rqid
+                    # Foul Play's protocol parser consumes the Showdown line
+                    # itself, so modifying only pending_request is insufficient.
+                    # Feed the parser the same request object containing rqid.
+                    line = f"{prefix}|request|{json.dumps(request, separators=(\',\', \':\'))}"
                     request_seen = True
                 except json.JSONDecodeError:
                     pass
+            normalized_lines.append(line)
 
             if line.startswith("|switch|"):
                 parts = line.split("|")
                 if len(parts) > 3 and parts[2].startswith(self.battle.opponent.name + "a:"):
                     if self.pending_opponent_switch is None:
                         self.pending_opponent_switch = line
-        return request_seen
+        return request_seen, normalized_lines
 
     async def message(self, chunk):
         if not self.battle:
             raise RuntimeError("bridge received Showdown data before init")
 
         lines = [x for x in chunk.splitlines() if x]
-        request_seen = self.capture_lines(lines)
+        request_seen, normalized_lines = self.capture_lines(lines)
 
         await self.initialize_from_first_turn()
         if not self.initialized:
-            self.battle.msg_list.extend(lines)
+            self.battle.msg_list.extend(normalized_lines)
             return
 
         action_required = False
-        for line in lines:
+        for line in normalized_lines:
             try:
                 required = await async_update_battle(self.battle, line)
                 action_required = action_required or bool(required)
