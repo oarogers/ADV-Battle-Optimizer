@@ -6,7 +6,8 @@
   "scripts": {
     "bridge": "node src/run-bridge.mjs",
     "validate": "node src/validate.mjs",
-    "validate:optimizer": "node src/optimizer/validate.mjs"
+    "validate:optimizer": "node src/optimizer/validate.mjs",
+    "test:battle": "node src/optimizer/battle/test-battle.mjs"
   },
   "dependencies": {
     "pokemon-showdown": "latest"
