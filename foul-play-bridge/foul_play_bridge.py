@@ -29,6 +29,7 @@ class Bridge:
         self.pending_request = None
         self.pending_opponent_switch = None
         self.searching = False
+        self.next_rqid = 1
 
     def send(self, obj):
         sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
@@ -36,14 +37,6 @@ class Bridge:
 
     @staticmethod
     def normalize_team(team):
-        """Convert optimizer sets to the team_dict representation Foul Play expects.
-
-        Foul Play's battle parser stores species names in its canonical lowercase
-        form (e.g. ``tyranitar``), and state.py matches team_dict species exactly.
-        The optimizer's domain model intentionally uses display-case names, so the
-        adapter owns this representation conversion rather than leaking it into the
-        rest of the application.
-        """
         if not isinstance(team, list):
             raise ValueError("Foul Play team must be a list of sets")
 
@@ -135,9 +128,19 @@ class Bridge:
         for line in lines:
             if "|request|" in line:
                 try:
-                    self.pending_request = json.loads(line.split("|request|", 1)[1])
-                    self.battle.request_json = self.pending_request
-                    self.battle.rqid = self.pending_request.get("rqid")
+                    request = json.loads(line.split("|request|", 1)[1])
+                    # The local Showdown adapter used by the optimizer does not
+                    # always include rqid. Foul Play's protocol code requires the
+                    # field, so preserve a real Showdown rqid when present and use
+                    # a monotonically increasing adapter-local id otherwise.
+                    rqid = request.get("rqid")
+                    if rqid is None:
+                        rqid = self.next_rqid
+                        self.next_rqid += 1
+                        request["rqid"] = rqid
+                    self.pending_request = request
+                    self.battle.request_json = request
+                    self.battle.rqid = rqid
                     request_seen = True
                 except json.JSONDecodeError:
                     pass
