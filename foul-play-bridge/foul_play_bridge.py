@@ -149,9 +149,13 @@ class Bridge:
             except Exception:
                 if self.battle.turn and self.battle.started:
                     raise
+        # The Showdown request is authoritative. Foul Play's internal `wait`
+        # flag can remain set after Roar/forced-switch sequences even though
+        # Showdown is explicitly asking this side for its next action. Do not
+        # let that stale internal flag suppress a valid request.
         if request_seen and self.request_needs_decision(self.pending_request):
             action_required = True
-        if action_required and not self.searching and not self.battle.wait:
+        if action_required and not self.searching:
             await self.recommend()
 
     @staticmethod
