@@ -57,9 +57,16 @@ export class ShowdownBattleEngine extends BattleEngine {
         }
 
         const isRequest = chunk.includes("|request|");
+        // Showdown emits |request|{"wait":true,...} when the other side must
+        // act first (for example immediately after a faint). That is a state
+        // update, not a decision point. Queueing a Foul Play waiter for it
+        // leaves a stale waiter in front of the next real request, causing the
+        // next recommendation to resolve the wrong promise and the real
+        // decision to time out.
+        const needsDecision = isRequest && requestNeedsDecision(chunk);
         // Install the waiter before updating Foul Play: the bridge can answer
         // synchronously for a very cheap search.
-        const waiter = isRequest ? foulPlay[side].waitForRecommendation() : null;
+        const waiter = needsDecision ? foulPlay[side].waitForRecommendation() : null;
         foulPlay[side].update(chunk);
 
         if (chunk.includes("|teampreview|")) {
@@ -106,6 +113,19 @@ export class ShowdownBattleEngine extends BattleEngine {
       foulPlay.p1.stop();
       foulPlay.p2.stop();
     }
+  }
+}
+
+export function requestNeedsDecision(chunk) {
+  const requestLine = String(chunk).split("\n").find((line) => line.startsWith("|request|"));
+  if (!requestLine) return false;
+  try {
+    const request = JSON.parse(requestLine.slice("|request|".length));
+    return request?.wait !== true;
+  } catch {
+    // Preserve the previous behavior for malformed/unparseable request data;
+    // the bridge may still be able to interpret the raw Showdown chunk.
+    return true;
   }
 }
 
