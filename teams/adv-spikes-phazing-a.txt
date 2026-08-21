@@ -41,7 +41,7 @@ Adamant Nature
 - Rock Slide
 - Earthquake
 - Pursuit
-- Dragon Dance
+- Fire Blast
 
 Metagross @ Leftovers
 Ability: Clear Body
