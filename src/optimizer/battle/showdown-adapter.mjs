@@ -142,6 +142,10 @@ function parseLatestRequest(chunk) {
   catch (error) { throw new Error(`Malformed Showdown request JSON: ${error.message}`); }
 }
 
+function normalizeMoveName(name) {
+  return String(name).toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
 function validateAdvDecision(decision, format, request, rqid) {
   let normalized = String(decision).trim();
   if (normalized.startsWith("/choose ")) normalized = normalized.slice("/choose ".length).trim();
@@ -155,10 +159,33 @@ function validateAdvDecision(decision, format, request, rqid) {
     throw new Error(`Stale Foul Play request id ${rqid}; Showdown is waiting on ${request.rqid}`);
   }
 
-  const match = /^(move|switch)\s+(\d+)$/i.exec(normalized);
-  if (!match) throw new Error(`Foul Play produced an unsupported ADV decision syntax: ${normalized}`);
-  const kind = match[1].toLowerCase();
-  const slot = Number(match[2]);
+  const numericMatch = /^(move|switch)\s+(\d+)$/i.exec(normalized);
+  const namedMoveMatch = /^move\s+(.+)$/i.exec(normalized);
+  if (!numericMatch && !namedMoveMatch) {
+    throw new Error(`Foul Play produced an unsupported ADV decision syntax: ${normalized}`);
+  }
+
+  let kind;
+  let slot;
+  if (numericMatch) {
+    kind = numericMatch[1].toLowerCase();
+    slot = Number(numericMatch[2]);
+  } else {
+    kind = "move";
+    const requestedName = normalizeMoveName(namedMoveMatch[1]);
+    const moves = request.active?.[0]?.moves ?? [];
+    const matches = moves
+      .map((move, index) => ({ move, index }))
+      .filter(({ move }) => normalizeMoveName(move.move) === requestedName);
+    if (matches.length === 0) {
+      throw new Error(`Foul Play selected a move not present in the current Showdown request: ${namedMoveMatch[1]}`);
+    }
+    if (matches.length > 1) {
+      throw new Error(`Foul Play selected an ambiguous move name in the current Showdown request: ${namedMoveMatch[1]}`);
+    }
+    slot = matches[0].index + 1;
+    normalized = `move ${slot}`;
+  }
 
   if (kind === "move") {
     if (request.forceSwitch) throw new Error(`Foul Play attempted a move during a forced switch: ${normalized}`);
