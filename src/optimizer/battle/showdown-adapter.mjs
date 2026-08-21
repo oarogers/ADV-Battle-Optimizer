@@ -56,10 +56,12 @@ export class ShowdownBattleEngine extends BattleEngine {
           return;
         }
 
-        const isRequest = chunk.includes("|request|");
-        // Install the waiter before updating Foul Play: the bridge can answer
-        // synchronously for a very cheap search.
-        const waiter = isRequest ? foulPlay[side].waitForRecommendation() : null;
+        // Showdown emits request messages for both players even when a side
+        // is not allowed to act (for example {"wait":true} while the other
+        // side is choosing a replacement). Only create a recommendation
+        // waiter for a request that actually requires this side to decide.
+        const needsDecision = requestChunkNeedsDecision(chunk);
+        const waiter = needsDecision ? foulPlay[side].waitForRecommendation() : null;
         foulPlay[side].update(chunk);
 
         if (chunk.includes("|teampreview|")) {
@@ -106,6 +108,21 @@ export class ShowdownBattleEngine extends BattleEngine {
       foulPlay.p1.stop();
       foulPlay.p2.stop();
     }
+  }
+}
+
+function requestChunkNeedsDecision(chunk) {
+  const marker = "|request|";
+  const index = chunk.indexOf(marker);
+  if (index < 0) return false;
+
+  try {
+    const request = JSON.parse(chunk.slice(index + marker.length));
+    if (request.wait || request.teamPreview) return false;
+    if (Array.isArray(request.forceSwitch) && request.forceSwitch.some(Boolean)) return true;
+    return Array.isArray(request.active) && request.active.length > 0;
+  } catch {
+    return false;
   }
 }
 
