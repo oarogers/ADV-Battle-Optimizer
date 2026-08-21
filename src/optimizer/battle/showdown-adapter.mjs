@@ -149,6 +149,9 @@ function normalizeMoveName(name) {
 function validateAdvDecision(decision, format, request, rqid) {
   let normalized = String(decision).trim();
   if (normalized.startsWith("/choose ")) normalized = normalized.slice("/choose ".length).trim();
+  // Foul Play may emit a Showdown-style slash command directly. Strip only the
+  // command marker; the action still has to pass the request-based legality checks below.
+  if (/^\/(?:move|switch)\s+/i.test(normalized)) normalized = normalized.slice(1).trim();
   if (!normalized) throw new Error("Foul Play produced an empty decision");
   if (/\b(terastallize|mega|zmove|dynamax|max|gigantamax)\b/i.test(normalized)) {
     throw new Error(`Foul Play produced a non-ADV action for ${format}: ${normalized}`);
