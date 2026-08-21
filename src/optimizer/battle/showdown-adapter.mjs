@@ -39,6 +39,11 @@ export class ShowdownBattleEngine extends BattleEngine {
     const decisions = [];
     const requests = { p1: null, p2: null };
     const foulPlay = {
+      // IMPORTANT: propagate the adapter's configured timeout. FoulPlayProcess
+      // otherwise falls back to its 15s constructor default, which was shorter
+      // than the harness's documented --decisionTimeoutMs default of 60s and
+      // could kill the first decision while Foul Play was still initializing
+      // its datasets/search state.
       p1: new FoulPlayProcess({ root: this.foulPlayRoot, side: "p1", timeoutMs: this.decisionTimeoutMs }),
       p2: new FoulPlayProcess({ root: this.foulPlayRoot, side: "p2", timeoutMs: this.decisionTimeoutMs }),
     };
@@ -149,8 +154,6 @@ function normalizeMoveName(name) {
 function validateAdvDecision(decision, format, request, rqid) {
   let normalized = String(decision).trim();
   if (normalized.startsWith("/choose ")) normalized = normalized.slice("/choose ".length).trim();
-  // Foul Play may emit a Showdown-style slash command directly. Strip only the
-  // command marker; the action still has to pass the request-based legality checks below.
   if (/^\/(?:move|switch)\s+/i.test(normalized)) normalized = normalized.slice(1).trim();
   if (!normalized) throw new Error("Foul Play produced an empty decision");
   if (/\b(terastallize|mega|zmove|dynamax|max|gigantamax)\b/i.test(normalized)) {
