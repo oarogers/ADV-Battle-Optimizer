@@ -40,6 +40,7 @@ export class ShowdownBattleEngine extends BattleEngine {
     };
     const teams = { p1: ourTeam, p2: opponentTeam };
     let battleFinished = false;
+    let decisionError = null;
 
     const debug = (message) => {
       if (process.env.DEBUG_SHOWDOWN) process.stderr.write(`[showdown] ${message}\n`);
@@ -57,9 +58,12 @@ export class ShowdownBattleEngine extends BattleEngine {
         }
 
         const isRequest = chunk.includes("|request|");
-        // Install the waiter before updating Foul Play: the bridge can answer
-        // synchronously for a very cheap search.
-        const waiter = isRequest ? foulPlay[side].waitForRecommendation() : null;
+        const needsDecision = isRequest && requestNeedsDecision(chunk);
+        const waiter = needsDecision ? foulPlay[side].waitForRecommendation() : null;
+
+        // Do not await the recommendation here. Foul Play can need a later
+        // Showdown chunk before it can answer; blocking this reader would
+        // prevent that chunk from ever reaching the bridge.
         foulPlay[side].update(chunk);
 
         if (chunk.includes("|teampreview|")) {
@@ -71,14 +75,15 @@ export class ShowdownBattleEngine extends BattleEngine {
         }
 
         if (waiter) {
-          const decision = await waiter;
-          if (battleFinished) return;
-          if (decision.decision) {
-            const safeDecision = validateAdvDecision(decision.decision, this.format);
-            const command = `>${side} ${safeDecision}`;
-            debug(`${side} -> ${command}`);
-            stream.write(command);
-          }
+          void resolveDecision({
+            side,
+            waiter,
+            format: this.format,
+            stream,
+            debug,
+            foulPlay,
+            onError: (error) => { decisionError ??= error; },
+          });
         }
       }
     };
@@ -99,6 +104,8 @@ export class ShowdownBattleEngine extends BattleEngine {
         waitForBattleCompletion(15_000, chunks),
       ]);
 
+      if (decisionError) throw decisionError;
+
       const protocolLog = [...chunks.p1.map((chunk) => `[p1]\n${chunk}`), ...chunks.p2.map((chunk) => `[p2]\n${chunk}`)].join("\n");
       const winner = parseWinner(protocolLog);
       return { id, format: this.format, ourTeamId, opponentTeamId, seed, winner, turns: parseTurns(protocolLog), status: winner ? "complete" : "incomplete", protocolLog, engineVersion: pkg?.VERSION ?? "unknown", ai: "foul-play", canonicalRequest: canonicalJson({ ourTeam, opponentTeam, seed }) };
@@ -106,6 +113,32 @@ export class ShowdownBattleEngine extends BattleEngine {
       foulPlay.p1.stop();
       foulPlay.p2.stop();
     }
+  }
+}
+
+async function resolveDecision({ side, waiter, format, stream, debug, foulPlay, onError }) {
+  try {
+    const decision = await waiter;
+    if (decision?.decision) {
+      const safeDecision = validateAdvDecision(decision.decision, format);
+      const command = `>${side} ${safeDecision}`;
+      debug(`${side} -> ${command}`);
+      if (!foulPlay[side].child) return;
+      stream.write(command);
+    }
+  } catch (error) {
+    onError(error);
+  }
+}
+
+export function requestNeedsDecision(chunk) {
+  const requestLine = String(chunk).split("\n").find((line) => line.startsWith("|request|"));
+  if (!requestLine) return false;
+  try {
+    const request = JSON.parse(requestLine.slice("|request|".length));
+    return request?.wait !== true;
+  } catch {
+    return true;
   }
 }
 
@@ -130,8 +163,6 @@ function validateAdvDecision(decision, format) {
   let normalized = String(decision).trim();
   if (normalized.startsWith("/choose ")) normalized = normalized.slice("/choose ".length).trim();
   if (normalized === "/choose") normalized = "";
-  // The bridge speaks Foul Play's `/switch N` syntax, while the embedded
-  // Showdown BattleStream expects `switch N` after the player prefix.
   if (normalized.startsWith("/switch ")) normalized = normalized.slice("/".length);
   if (format !== "gen3ou") return normalized;
   if (/\bterastallize\b/i.test(normalized) || /\bmega\b/i.test(normalized) || /\bzmove\b/i.test(normalized) || /\bdynamax\b/i.test(normalized) || /\bgigantamax\b/i.test(normalized)) {
