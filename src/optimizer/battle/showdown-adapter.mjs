@@ -58,18 +58,12 @@ export class ShowdownBattleEngine extends BattleEngine {
         }
 
         const isRequest = chunk.includes("|request|");
-        // Showdown emits |request|{"wait":true,...} when the other side must
-        // act first (for example immediately after a faint). That is a state
-        // update, not a decision point. Queueing a Foul Play waiter for it
-        // leaves a stale waiter in front of the next real request.
         const needsDecision = isRequest && requestNeedsDecision(chunk);
         const waiter = needsDecision ? foulPlay[side].waitForRecommendation() : null;
 
-        // Always forward the protocol chunk immediately. In particular, do
-        // not await the recommendation here: Foul Play may need a later
-        // Showdown chunk before it can produce its recommendation. Blocking
-        // this reader while waiting creates a deadlock where that later chunk
-        // can never reach Foul Play.
+        // Do not await the recommendation here. Foul Play can need a later
+        // Showdown chunk before it can answer; blocking this reader would
+        // prevent that chunk from ever reaching the bridge.
         foulPlay[side].update(chunk);
 
         if (chunk.includes("|teampreview|")) {
@@ -81,7 +75,15 @@ export class ShowdownBattleEngine extends BattleEngine {
         }
 
         if (waiter) {
-          void resolveDecision({ side, waiter, stream, debug, foulPlay, onError: (error) => { decisionError ??= error; } });
+          void resolveDecision({
+            side,
+            waiter,
+            format: this.format,
+            stream,
+            debug,
+            foulPlay,
+            onError: (error) => { decisionError ??= error; },
+          });
         }
       }
     };
@@ -114,11 +116,11 @@ export class ShowdownBattleEngine extends BattleEngine {
   }
 }
 
-async function resolveDecision({ side, waiter, stream, debug, foulPlay, onError }) {
+async function resolveDecision({ side, waiter, format, stream, debug, foulPlay, onError }) {
   try {
     const decision = await waiter;
     if (decision?.decision) {
-      const safeDecision = validateAdvDecision(decision.decision, "gen3ou");
+      const safeDecision = validateAdvDecision(decision.decision, format);
       const command = `>${side} ${safeDecision}`;
       debug(`${side} -> ${command}`);
       if (!foulPlay[side].child) return;
