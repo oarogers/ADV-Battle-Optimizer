@@ -40,6 +40,7 @@ export class ShowdownBattleEngine extends BattleEngine {
     };
     const teams = { p1: ourTeam, p2: opponentTeam };
     let battleFinished = false;
+    let decisionError = null;
 
     const debug = (message) => {
       if (process.env.DEBUG_SHOWDOWN) process.stderr.write(`[showdown] ${message}\n`);
@@ -60,13 +61,15 @@ export class ShowdownBattleEngine extends BattleEngine {
         // Showdown emits |request|{"wait":true,...} when the other side must
         // act first (for example immediately after a faint). That is a state
         // update, not a decision point. Queueing a Foul Play waiter for it
-        // leaves a stale waiter in front of the next real request, causing the
-        // next recommendation to resolve the wrong promise and the real
-        // decision to time out.
+        // leaves a stale waiter in front of the next real request.
         const needsDecision = isRequest && requestNeedsDecision(chunk);
-        // Install the waiter before updating Foul Play: the bridge can answer
-        // synchronously for a very cheap search.
         const waiter = needsDecision ? foulPlay[side].waitForRecommendation() : null;
+
+        // Always forward the protocol chunk immediately. In particular, do
+        // not await the recommendation here: Foul Play may need a later
+        // Showdown chunk before it can produce its recommendation. Blocking
+        // this reader while waiting creates a deadlock where that later chunk
+        // can never reach Foul Play.
         foulPlay[side].update(chunk);
 
         if (chunk.includes("|teampreview|")) {
@@ -78,14 +81,7 @@ export class ShowdownBattleEngine extends BattleEngine {
         }
 
         if (waiter) {
-          const decision = await waiter;
-          if (battleFinished) return;
-          if (decision.decision) {
-            const safeDecision = validateAdvDecision(decision.decision, this.format);
-            const command = `>${side} ${safeDecision}`;
-            debug(`${side} -> ${command}`);
-            stream.write(command);
-          }
+          void resolveDecision({ side, waiter, stream, debug, foulPlay, onError: (error) => { decisionError ??= error; } });
         }
       }
     };
@@ -106,6 +102,8 @@ export class ShowdownBattleEngine extends BattleEngine {
         waitForBattleCompletion(15_000, chunks),
       ]);
 
+      if (decisionError) throw decisionError;
+
       const protocolLog = [...chunks.p1.map((chunk) => `[p1]\n${chunk}`), ...chunks.p2.map((chunk) => `[p2]\n${chunk}`)].join("\n");
       const winner = parseWinner(protocolLog);
       return { id, format: this.format, ourTeamId, opponentTeamId, seed, winner, turns: parseTurns(protocolLog), status: winner ? "complete" : "incomplete", protocolLog, engineVersion: pkg?.VERSION ?? "unknown", ai: "foul-play", canonicalRequest: canonicalJson({ ourTeam, opponentTeam, seed }) };
@@ -116,6 +114,21 @@ export class ShowdownBattleEngine extends BattleEngine {
   }
 }
 
+async function resolveDecision({ side, waiter, stream, debug, foulPlay, onError }) {
+  try {
+    const decision = await waiter;
+    if (decision?.decision) {
+      const safeDecision = validateAdvDecision(decision.decision, "gen3ou");
+      const command = `>${side} ${safeDecision}`;
+      debug(`${side} -> ${command}`);
+      if (!foulPlay[side].child) return;
+      stream.write(command);
+    }
+  } catch (error) {
+    onError(error);
+  }
+}
+
 export function requestNeedsDecision(chunk) {
   const requestLine = String(chunk).split("\n").find((line) => line.startsWith("|request|"));
   if (!requestLine) return false;
@@ -123,8 +136,6 @@ export function requestNeedsDecision(chunk) {
     const request = JSON.parse(requestLine.slice("|request|".length));
     return request?.wait !== true;
   } catch {
-    // Preserve the previous behavior for malformed/unparseable request data;
-    // the bridge may still be able to interpret the raw Showdown chunk.
     return true;
   }
 }
@@ -150,8 +161,6 @@ function validateAdvDecision(decision, format) {
   let normalized = String(decision).trim();
   if (normalized.startsWith("/choose ")) normalized = normalized.slice("/choose ".length).trim();
   if (normalized === "/choose") normalized = "";
-  // The bridge speaks Foul Play's `/switch N` syntax, while the embedded
-  // Showdown BattleStream expects `switch N` after the player prefix.
   if (normalized.startsWith("/switch ")) normalized = normalized.slice("/".length);
   if (format !== "gen3ou") return normalized;
   if (/\bterastallize\b/i.test(normalized) || /\bmega\b/i.test(normalized) || /\bzmove\b/i.test(normalized) || /\bdynamax\b/i.test(normalized) || /\bgigantamax\b/i.test(normalized)) {
