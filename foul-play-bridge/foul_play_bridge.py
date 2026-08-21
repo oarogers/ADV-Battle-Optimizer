@@ -152,8 +152,17 @@ class Bridge:
         self.searching = True
         try:
             start = time.perf_counter()
+
+            # Foul Play's async search can perform CPU-bound work without yielding
+            # to its event loop. Running it in a worker thread keeps this bridge's
+            # JSONL event loop responsive so the timeout can actually fire and
+            # Showdown protocol errors can be reported instead of looking like a
+            # hung Foul Play process.
+            async def run_search():
+                return await asyncio.to_thread(lambda: asyncio.run(async_pick_move(self.battle)))
+
             try:
-                decision = await asyncio.wait_for(async_pick_move(self.battle), timeout=2.0)
+                decision = await asyncio.wait_for(run_search(), timeout=2.0)
             except asyncio.TimeoutError as exc:
                 raise RuntimeError("Foul Play move search exceeded 2000 ms; bridge aborting instead of hanging") from exc
             elapsed_ms = int((time.perf_counter() - start) * 1000)
