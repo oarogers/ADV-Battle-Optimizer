@@ -22,9 +22,7 @@ function updateRecord(record, result) {
   else record.ties += 1;
 }
 
-export function recordBattle(stats, { teamId, opponentTeamId, setIds = [], opponentSetIds = [], result, opponentStrength = null }) {
-  updateRecord(stats, stats);
-  // The top-level record is maintained independently from team/set records.
+export function recordBattle(stats, { teamId, opponentTeamId, setIds = [], result, opponentStrength = null }) {
   updateRecord(stats, result);
 
   const team = ensure(stats.teams, teamId, () => ({ battles: 0, wins: 0, losses: 0, ties: 0 }));
