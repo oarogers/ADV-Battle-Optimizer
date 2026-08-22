@@ -8,6 +8,7 @@
     "validate": "node src/validate.mjs",
     "validate:optimizer": "node src/optimizer/validate.mjs",
     "test:battle": "node src/optimizer/battle/test-battle.mjs",
+    "test:roles": "node src/optimizer/sets/test-role-classifier.mjs",
     "import:smogon": "node scripts/import-smogon-sets.mjs"
   },
   "dependencies": {
