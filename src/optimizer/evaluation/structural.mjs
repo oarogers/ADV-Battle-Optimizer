@@ -13,7 +13,7 @@ function tags(set) {
 }
 
 function countGroup(team, group) {
-  return team.reduce((n, set) => n + [...tags(set)].some(tag => group.has(tag)) ? 1 : 0, 0);
+  return team.reduce((n, set) => n + ([...tags(set)].some(tag => group.has(tag)) ? 1 : 0), 0);
 }
 
 function roleCoverage(team) {
