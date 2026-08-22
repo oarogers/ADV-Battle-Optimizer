@@ -1,0 +1,60 @@
+{
+  "id": "mmo-season-1",
+  "extends": "emerald-base.json",
+  "addSpecies": [
+    "Eevee",
+    "Vaporeon",
+    "Jolteon",
+    "Flareon",
+    "Espeon",
+    "Umbreon",
+    "Charizard",
+    "Charmeleon",
+    "Charmander"
+  ],
+  "metadata": {
+    "Eevee": {
+      "availability": "limited",
+      "origin": "mmo_gift"
+    },
+    "Vaporeon": {
+      "availability": "limited",
+      "origin": "mmo_gift",
+      "derivedFrom": "Eevee"
+    },
+    "Jolteon": {
+      "availability": "limited",
+      "origin": "mmo_gift",
+      "derivedFrom": "Eevee"
+    },
+    "Flareon": {
+      "availability": "limited",
+      "origin": "mmo_gift",
+      "derivedFrom": "Eevee"
+    },
+    "Espeon": {
+      "availability": "limited",
+      "origin": "mmo_gift",
+      "derivedFrom": "Eevee"
+    },
+    "Umbreon": {
+      "availability": "limited",
+      "origin": "mmo_gift",
+      "derivedFrom": "Eevee"
+    },
+    "Charmander": {
+      "availability": "limited",
+      "origin": "mmo_gift"
+    },
+    "Charmeleon": {
+      "availability": "limited",
+      "origin": "mmo_gift",
+      "derivedFrom": "Charmander"
+    },
+    "Charizard": {
+      "availability": "limited",
+      "origin": "mmo_gift",
+      "derivedFrom": "Charmander"
+    }
+  }
+}
