@@ -7,7 +7,11 @@
     "bridge": "node src/run-bridge.mjs",
     "validate": "node src/validate.mjs",
     "validate:optimizer": "node src/optimizer/validate.mjs",
-    "test:battle": "node src/optimizer/battle/test-battle.mjs"
+    "test:battle": "node src/optimizer/battle/test-battle.mjs",
+    "test:roles": "node src/optimizer/sets/test-role-classifier.mjs",
+    "test:optimizer": "node --test src/optimizer/**/*.test.mjs",
+    "import:smogon": "node scripts/import-smogon-sets.mjs",
+    "optimize:smoke": "node scripts/run-optimizer.mjs"
   },
   "dependencies": {
     "pokemon-showdown": "latest"

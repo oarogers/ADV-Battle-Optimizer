@@ -1,0 +1,8 @@
+{
+  "id": "pokemon-emerald-base",
+  "basePool": "emerald",
+  "source": {
+    "provider": "pokemon-emerald-gen3-national-dex",
+    "notes": "Initial MMO policy treats all 386 Generation III National Dex species as legal. Acquisition method and event status are informational rather than legality restrictions."
+  }
+}

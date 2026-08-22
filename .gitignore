@@ -1,3 +1,4 @@
 node_modules/
 foul-play-src/
 npm-debug.log*
+data/generated/
