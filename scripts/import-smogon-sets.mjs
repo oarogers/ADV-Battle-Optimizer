@@ -16,7 +16,8 @@ const format = args.format ?? DEFAULT_FORMAT;
 const source = args.source ?? "dex";
 const url = args.url ?? `https://play.pokemonshowdown.com/data/sets/${format}.json`;
 const output = args.output ?? `data/generated/smogon-${format}.json`;
-const pool = args.pool ? await loadPool(args.pool) : null;
+const poolConfig = args.pool ? await loadPool(args.pool, format) : null;
+const pool = poolConfig?.species ?? null;
 
 if (format !== "gen3ou") {
   throw new Error(`This importer currently targets ADV/Gen 3 data; got ${format}.`);
@@ -61,7 +62,6 @@ for (const [species, namedSets] of Object.entries(sourceData)) {
         continue;
       }
 
-      const tags = classifySet(set, speciesData);
       records.push({
         id: setId(set),
         ...set,
@@ -72,7 +72,8 @@ for (const [species, namedSets] of Object.entries(sourceData)) {
           format,
           url,
         },
-        tags,
+        availability: poolConfig?.metadata?.[species] ?? null,
+        tags: classifySet(set, speciesData),
       });
     } catch (error) {
       rejected.push({ species, name, problems: [error.message] });
@@ -81,12 +82,13 @@ for (const [species, namedSets] of Object.entries(sourceData)) {
 }
 
 const result = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   importedAt: new Date().toISOString(),
   format,
   source,
   sourceUrl: url,
   pool: pool ? [...pool].sort() : null,
+  poolConfig: poolConfig?.id ?? null,
   count: records.length,
   rejectedCount: rejected.length,
   sets: records,
@@ -112,11 +114,45 @@ function parseArgs(argv) {
   return parsed;
 }
 
-async function loadPool(filename) {
+async function loadPool(filename, format) {
   const data = JSON.parse(await fs.readFile(filename, "utf8"));
-  const species = Array.isArray(data) ? data : data.species;
-  if (!Array.isArray(species) || !species.length) {
-    throw new Error(`Pool file ${filename} must contain an array or {"species": [...]}.`);
+  const dex = Dex.forFormat(format);
+
+  if (Array.isArray(data)) {
+    return { id: path.basename(filename), species: new Set(data.map(String)), metadata: {} };
   }
-  return new Set(species.map(String));
+
+  if (Array.isArray(data.species)) {
+    return {
+      id: data.id ?? path.basename(filename),
+      species: new Set(data.species.map(String)),
+      metadata: data.metadata ?? {},
+    };
+  }
+
+  if (data.basePool === "emerald") {
+    const unavailable = new Set(data.unavailableNationalDex ?? []);
+    const additions = new Set(data.tradeEvolutionAdditionsNationalDex ?? []);
+    const eventOnly = new Set(data.eventOnlyNationalDex ?? []);
+    const species = new Set();
+    const metadata = { ...(data.metadata ?? {}) };
+
+    for (const mon of dex.species.all()) {
+      if (!mon || mon.num < 1 || mon.num > 386 || mon.name.includes("-")) continue;
+      if (unavailable.has(mon.num) || eventOnly.has(mon.num)) continue;
+      species.add(mon.name);
+    }
+
+    for (const num of additions) {
+      const mon = dex.species.all().find((candidate) => candidate?.num === num);
+      if (!mon) throw new Error(`Unknown Gen 3 species number in pool: ${num}`);
+      species.add(mon.name);
+    }
+
+    for (const name of Object.keys(metadata)) species.add(name);
+
+    return { id: data.id ?? path.basename(filename), species, metadata };
+  }
+
+  throw new Error(`Pool file ${filename} must contain an array, {"species": [...]}, or {"basePool":"emerald"}.`);
 }
