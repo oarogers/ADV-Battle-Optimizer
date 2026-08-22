@@ -9,7 +9,6 @@ import { classifySet } from "../src/optimizer/sets/role-classifier.mjs";
 const { Dex, TeamValidator } = pkg;
 
 const DEFAULT_FORMAT = "gen3ou";
-const DEFAULT_URL = `https://play.pokemonshowdown.com/data/sets/${DEFAULT_FORMAT}.json`;
 
 const args = parseArgs(process.argv.slice(2));
 const format = args.format ?? DEFAULT_FORMAT;
@@ -35,6 +34,7 @@ const dex = Dex.forFormat(format);
 const validator = new TeamValidator(format);
 const records = [];
 const rejected = [];
+const importedSpecies = new Set();
 
 for (const [species, namedSets] of Object.entries(sourceData)) {
   if (pool && !pool.has(species)) continue;
@@ -75,11 +75,16 @@ for (const [species, namedSets] of Object.entries(sourceData)) {
         availability: poolConfig?.metadata?.[species] ?? null,
         tags: classifySet(set, speciesData),
       });
+      importedSpecies.add(species);
     } catch (error) {
       rejected.push({ species, name, problems: [error.message] });
     }
   }
 }
+
+const missingSpecies = pool
+  ? [...pool].filter((species) => !importedSpecies.has(species)).sort()
+  : [];
 
 const result = {
   schemaVersion: 2,
@@ -89,6 +94,9 @@ const result = {
   sourceUrl: url,
   pool: pool ? [...pool].sort() : null,
   poolConfig: poolConfig?.id ?? null,
+  speciesCount: pool?.size ?? importedSpecies.size,
+  speciesWithSets: importedSpecies.size,
+  missingSpecies,
   count: records.length,
   rejectedCount: rejected.length,
   sets: records,
@@ -99,7 +107,11 @@ await fs.mkdir(path.dirname(output), { recursive: true });
 await fs.writeFile(output, `${JSON.stringify(result, null, 2)}\n`);
 
 console.log(`Imported ${records.length} ${format} ${source} sets.`);
-if (pool) console.log(`Pool filter: ${pool.size} species.`);
+if (pool) {
+  console.log(`Pool filter: ${pool.size} species.`);
+  console.log(`Species with sets: ${importedSpecies.size}/${pool.size}.`);
+  if (missingSpecies.length) console.log(`Species with no imported sets: ${missingSpecies.join(", ")}`);
+}
 if (rejected.length) console.log(`Rejected ${rejected.length} sets during Showdown validation.`);
 console.log(`Wrote ${output}`);
 
