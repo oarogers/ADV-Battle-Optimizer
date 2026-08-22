@@ -46,6 +46,15 @@ function empiricalScore(record, riskWeight) {
   return mean * (1 - riskWeight) + lower * riskWeight;
 }
 
+function overlapWithSelected(team, selected) {
+  const a = new Set(speciesKey(team).split('|'));
+  return selected.reduce((max, item) => {
+    const b = new Set(speciesKey(item.team).split('|'));
+    const intersection = [...a].filter(x => b.has(x)).length;
+    return Math.max(max, intersection / 6);
+  }, 0);
+}
+
 function rankTeams(results, config) {
   const unique = new Map();
   for (const result of results) {
@@ -53,35 +62,42 @@ function rankTeams(results, config) {
     const existing = unique.get(key);
     if (!existing || result.score > existing.score) unique.set(key, result);
   }
+
   const ranked = [...unique.values()].sort((a, b) => b.score - a.score);
   const selected = [];
-  const speciesKeys = new Set();
-  for (const result of ranked) {
-    const overlap = selected.length ? selected.reduce((max, item) => {
-      const a = new Set(speciesKey(result.team).split('|'));
-      const b = new Set(speciesKey(item.team).split('|'));
-      const intersection = [...a].filter(x => b.has(x)).length;
-      return Math.max(max, intersection / 6);
-    }, 0) : 0;
-    const adjusted = result.score - config.diversityWeight * overlap;
-    if (selected.length < config.eliteCount && adjusted >= (selected.at(-1)?.adjustedScore ?? -Infinity)) {
-      selected.push({ ...result, adjustedScore: adjusted });
-      speciesKeys.add(speciesKey(result.team));
+  const remaining = [...ranked];
+
+  while (selected.length < config.eliteCount && remaining.length) {
+    let bestIndex = 0;
+    let bestAdjusted = -Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const result = remaining[i];
+      const overlap = overlapWithSelected(result.team, selected);
+      const adjusted = result.score - config.diversityWeight * overlap;
+      if (adjusted > bestAdjusted) {
+        bestAdjusted = adjusted;
+        bestIndex = i;
+      }
     }
+    const [chosen] = remaining.splice(bestIndex, 1);
+    selected.push({ ...chosen, adjustedScore: bestAdjusted });
   }
-  return selected.sort((a, b) => b.adjustedScore - a.adjustedScore).slice(0, config.eliteCount);
+
+  return selected.sort((a, b) => b.adjustedScore - a.adjustedScore);
 }
 
 /**
  * One search generation. Battle execution is injected so this module never
  * owns or modifies the working Showdown/Foul Play integration.
  *
- * evaluateTeam(team) must return { record } where record is a battle aggregate.
+ * evaluateTeam(team) must return { record, lead, leadRecords } where possible.
+ * underTestSets may contain sets that should receive explicit exploration.
  */
 export async function searchGeneration({ catalog, opponents, evaluateTeam, previous = [], stats = new Map(), options = {} }) {
   const config = { ...DEFAULTS, ...options };
   const rng = config.rng ?? Math.random;
   const candidates = [];
+  const underTestSets = config.underTestSets ?? [];
 
   for (const elite of previous.slice(0, config.eliteCount)) {
     candidates.push(elite.team);
@@ -95,7 +111,7 @@ export async function searchGeneration({ catalog, opponents, evaluateTeam, previ
     if (roll < config.randomFraction) {
       candidates.push(...generateCandidateTeams(catalog, { populationSize: 1, rng }));
     } else if (roll < config.randomFraction + config.explorationFraction) {
-      candidates.push(exploratoryTeam(catalog, [...stats.keys()].map(id => catalog.find(set => set.id === id)).filter(Boolean), rng));
+      candidates.push(exploratoryTeam(catalog, underTestSets, rng));
     } else if (previous.length) {
       const elite = previous[Math.floor(rng() * Math.min(previous.length, config.eliteCount))];
       candidates.push(mutateTeam(elite.team, catalog, rng));
@@ -114,7 +130,15 @@ export async function searchGeneration({ catalog, opponents, evaluateTeam, previ
     }
     const structure = evaluateStructure(team, { lead: result.lead ?? team[0] });
     const empirical = empiricalScore(result.record, config.riskWeight);
-    results.push({ team, record: result.record, empiricalScore: empirical, structure, score: empirical + 0.05 * structure.heuristicScore });
+    results.push({
+      team,
+      lead: result.lead ?? team[0],
+      leadRecords: result.leadRecords ?? new Map(),
+      record: result.record,
+      empiricalScore: empirical,
+      structure,
+      score: empirical + 0.05 * structure.heuristicScore,
+    });
   }
 
   return {
