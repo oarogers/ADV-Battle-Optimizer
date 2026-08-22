@@ -114,17 +114,31 @@ function parseArgs(argv) {
   return parsed;
 }
 
-async function loadPool(filename, format) {
-  const data = JSON.parse(await fs.readFile(filename, "utf8"));
+async function loadPool(filename, format, seen = new Set()) {
+  const resolved = path.resolve(filename);
+  if (seen.has(resolved)) throw new Error(`Circular pool inheritance detected at ${filename}.`);
+  seen.add(resolved);
+
+  const data = JSON.parse(await fs.readFile(resolved, "utf8"));
   const dex = Dex.forFormat(format);
 
+  if (data.extends) {
+    const parent = await loadPool(path.resolve(path.dirname(resolved), data.extends), format, seen);
+    const species = new Set(parent.species);
+    const metadata = { ...parent.metadata, ...(data.metadata ?? {}) };
+    for (const name of data.addSpecies ?? []) species.add(name);
+    for (const name of data.removeSpecies ?? []) species.delete(name);
+    for (const name of Object.keys(metadata)) species.add(name);
+    return { id: data.id ?? path.basename(resolved), species, metadata };
+  }
+
   if (Array.isArray(data)) {
-    return { id: path.basename(filename), species: new Set(data.map(String)), metadata: {} };
+    return { id: path.basename(resolved), species: new Set(data.map(String)), metadata: {} };
   }
 
   if (Array.isArray(data.species)) {
     return {
-      id: data.id ?? path.basename(filename),
+      id: data.id ?? path.basename(resolved),
       species: new Set(data.species.map(String)),
       metadata: data.metadata ?? {},
     };
@@ -152,8 +166,8 @@ async function loadPool(filename, format) {
     for (const name of data.addSpecies ?? []) species.add(name);
     for (const name of Object.keys(metadata)) species.add(name);
 
-    return { id: data.id ?? path.basename(filename), species, metadata };
+    return { id: data.id ?? path.basename(resolved), species, metadata };
   }
 
-  throw new Error(`Pool file ${filename} must contain an array, {"species": [...]}, or {"basePool":"emerald"}.`);
+  throw new Error(`Pool file ${filename} must contain an array, {"species": [...]}, {"extends": ...}, or {"basePool":"emerald"}.`);
 }
