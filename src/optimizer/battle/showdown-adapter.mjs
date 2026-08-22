@@ -7,11 +7,12 @@ import { teamId, battleId, canonicalJson } from "../domain/identity.mjs";
 const { BattleStream, Teams, TeamValidator, getPlayerStreams } = pkg;
 
 export class ShowdownBattleEngine extends BattleEngine {
-  constructor({ format = "gen3ou", foulPlayRoot = defaultFoulPlayRoot(), decisionTimeoutMs = 60_000 } = {}) {
+  constructor({ format = "gen3ou", foulPlayRoot = defaultFoulPlayRoot(), decisionTimeoutMs = 15_000, battleTimeoutMs = 120_000 } = {}) {
     super();
     this.format = format;
     this.foulPlayRoot = foulPlayRoot;
     this.decisionTimeoutMs = decisionTimeoutMs;
+    this.battleTimeoutMs = battleTimeoutMs;
     this.validator = new TeamValidator(format);
   }
 
@@ -34,9 +35,13 @@ export class ShowdownBattleEngine extends BattleEngine {
     const stream = new BattleStream();
     const playerStreams = getPlayerStreams(stream);
     const chunks = { p1: [], p2: [] };
+    // Foul Play's bridge has its own 2s search ceiling. Keep the per-decision
+    // timeout shorter than the battle watchdog so a broken AI process reports
+    // the actual decision failure instead of being masked by the battle timer.
+    const decisionTimeoutMs = Math.min(this.decisionTimeoutMs, 5_000);
     const foulPlay = {
-      p1: new FoulPlayProcess({ root: this.foulPlayRoot, side: "p1", timeoutMs: this.decisionTimeoutMs }),
-      p2: new FoulPlayProcess({ root: this.foulPlayRoot, side: "p2", timeoutMs: this.decisionTimeoutMs }),
+      p1: new FoulPlayProcess({ root: this.foulPlayRoot, side: "p1", timeoutMs: decisionTimeoutMs }),
+      p2: new FoulPlayProcess({ root: this.foulPlayRoot, side: "p2", timeoutMs: decisionTimeoutMs }),
     };
     const teams = { p1: ourTeam, p2: opponentTeam };
     let battleFinished = false;
@@ -56,10 +61,12 @@ export class ShowdownBattleEngine extends BattleEngine {
           return;
         }
 
-        const isRequest = chunk.includes("|request|");
-        // Install the waiter before updating Foul Play: the bridge can answer
-        // synchronously for a very cheap search.
-        const waiter = isRequest ? foulPlay[side].waitForRecommendation() : null;
+        // A request only requires a decision when it has active or
+        // forceSwitch data. In particular, {"wait":true} is informational
+        // and must not create a waiter for a recommendation that can never
+        // arrive.
+        const needsDecision = requestChunkNeedsDecision(chunk);
+        const waiter = needsDecision ? foulPlay[side].waitForRecommendation() : null;
         foulPlay[side].update(chunk);
 
         if (chunk.includes("|teampreview|")) {
@@ -71,14 +78,15 @@ export class ShowdownBattleEngine extends BattleEngine {
         }
 
         if (waiter) {
+          debug(`${side}: waiting for Foul Play recommendation`);
           const decision = await waiter;
+          debug(`${side}: recommendation=${JSON.stringify(decision)}`);
           if (battleFinished) return;
-          if (decision.decision) {
-            const safeDecision = validateAdvDecision(decision.decision, this.format);
-            const command = `>${side} ${safeDecision}`;
-            debug(`${side} -> ${command}`);
-            stream.write(command);
-          }
+          if (!decision?.decision) throw new Error(`Foul Play ${side} returned an empty decision`);
+          const safeDecision = validateAdvDecision(decision.decision, this.format);
+          const command = `>${side} ${safeDecision}`;
+          debug(`${side} -> ${command}`);
+          stream.write(command);
         }
       }
     };
@@ -96,7 +104,7 @@ export class ShowdownBattleEngine extends BattleEngine {
 
       await Promise.race([
         Promise.all([consume("p1", playerStreams.p1), consume("p2", playerStreams.p2)]),
-        waitForBattleCompletion(15_000, chunks),
+        waitForBattleCompletion(this.battleTimeoutMs, chunks),
       ]);
 
       const protocolLog = [...chunks.p1.map((chunk) => `[p1]\n${chunk}`), ...chunks.p2.map((chunk) => `[p2]\n${chunk}`)].join("\n");
@@ -106,6 +114,21 @@ export class ShowdownBattleEngine extends BattleEngine {
       foulPlay.p1.stop();
       foulPlay.p2.stop();
     }
+  }
+}
+
+function requestChunkNeedsDecision(chunk) {
+  const marker = "|request|";
+  const index = chunk.indexOf(marker);
+  if (index < 0) return false;
+
+  try {
+    const request = JSON.parse(chunk.slice(index + marker.length));
+    if (request.wait || request.teamPreview) return false;
+    if (Array.isArray(request.forceSwitch) && request.forceSwitch.some(Boolean)) return true;
+    return Array.isArray(request.active) && request.active.length > 0;
+  } catch {
+    return false;
   }
 }
 
@@ -130,8 +153,6 @@ function validateAdvDecision(decision, format) {
   let normalized = String(decision).trim();
   if (normalized.startsWith("/choose ")) normalized = normalized.slice("/choose ".length).trim();
   if (normalized === "/choose") normalized = "";
-  // The bridge speaks Foul Play's `/switch N` syntax, while the embedded
-  // Showdown BattleStream expects `switch N` after the player prefix.
   if (normalized.startsWith("/switch ")) normalized = normalized.slice("/".length);
   if (format !== "gen3ou") return normalized;
   if (/\bterastallize\b/i.test(normalized) || /\bmega\b/i.test(normalized) || /\bzmove\b/i.test(normalized) || /\bdynamax\b/i.test(normalized) || /\bgigantamax\b/i.test(normalized)) {
