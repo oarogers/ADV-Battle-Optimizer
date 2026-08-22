@@ -149,6 +149,7 @@ async function loadPool(filename, format) {
       species.add(mon.name);
     }
 
+    for (const name of data.addSpecies ?? []) species.add(name);
     for (const name of Object.keys(metadata)) species.add(name);
 
     return { id: data.id ?? path.basename(filename), species, metadata };
